@@ -26,8 +26,12 @@ pub struct FlowchartApp {
     show_context_menu: bool,
     /// Whether the grid should be displayed on the canvas
     show_grid: bool,
-    /// Canvas position where the context menu should appear
-    context_menu_pos: (f32, f32),
+    /// Current zoom level (1.0 = normal, 2.0 = 2x zoom, 0.5 = 50% zoom)
+    zoom_factor: f32,
+    /// Screen position where the context menu should appear
+    context_menu_screen_pos: (f32, f32),
+    /// World position where nodes should be created from context menu
+    context_menu_world_pos: (f32, f32),
     /// Counter for generating unique default node names
     node_counter: u32,
     /// Node currently being edited for name changes
@@ -62,7 +66,9 @@ impl Default for FlowchartApp {
             simulation_speed: 1.0,
             show_context_menu: false,
             show_grid: true, // Grid enabled by default
-            context_menu_pos: (0.0, 0.0),
+            zoom_factor: 1.0, // Normal zoom level
+            context_menu_screen_pos: (0.0, 0.0),
+            context_menu_world_pos: (0.0, 0.0),
             node_counter: 0,
             editing_node_name: None,
             temp_node_name: String::new(),
@@ -280,8 +286,8 @@ impl FlowchartApp {
 
     /// Renders the right-click context menu for creating nodes.
     fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
-        // Convert canvas coordinates to screen coordinates for menu positioning
-        let screen_pos = egui::pos2(self.context_menu_pos.0, self.context_menu_pos.1) + self.canvas_offset;
+        // Use the stored screen coordinates for menu positioning
+        let screen_pos = egui::pos2(self.context_menu_screen_pos.0, self.context_menu_screen_pos.1);
 
         let area_response = egui::Area::new(egui::Id::new("context_menu"))
             .fixed_pos(screen_pos)
@@ -336,7 +342,7 @@ impl FlowchartApp {
 
         let new_node = FlowchartNode::new(
             format!("node{}", self.node_counter),
-            self.context_menu_pos,
+            self.context_menu_world_pos,
             node_type,
         );
 
@@ -419,6 +425,9 @@ impl FlowchartApp {
         // Handle canvas panning with middle mouse button
         self.handle_canvas_panning(ui, &response);
 
+        // Handle scroll wheel zooming
+        self.handle_canvas_zoom(ui, &response);
+
         // Handle node dragging with left mouse button
         self.handle_node_dragging(ui, &response);
 
@@ -454,20 +463,51 @@ impl FlowchartApp {
         }
     }
 
+    /// Handles scroll wheel zooming functionality.
+    fn handle_canvas_zoom(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+
+        if scroll_delta != 0.0 {
+            // Use hover position if available, otherwise use response position
+            let mouse_pos = ui.input(|i| i.pointer.hover_pos())
+                .or_else(|| response.interact_pointer_pos());
+
+            if let Some(mouse_pos) = mouse_pos {
+                // Calculate the world position under the mouse cursor before zoom
+                let world_pos_before_zoom = self.screen_to_world(mouse_pos);
+
+                // Apply zoom change with smaller, more precise steps
+                let zoom_multiplier = if scroll_delta > 0.0 { 1.05 } else { 1.0 / 1.05 };
+                let old_zoom = self.zoom_factor;
+                self.zoom_factor = (self.zoom_factor * zoom_multiplier).clamp(0.1, 5.0);
+
+                // Only adjust offset if zoom actually changed
+                if (self.zoom_factor - old_zoom).abs() > f32::EPSILON {
+                    // Calculate where that world position should appear on screen after zoom
+                    let world_pos_after_zoom = self.world_to_screen(world_pos_before_zoom);
+
+                    // Adjust canvas offset to keep the world position under the mouse cursor
+                    let offset_adjustment = mouse_pos - world_pos_after_zoom;
+                    self.canvas_offset += offset_adjustment;
+                }
+            }
+        }
+    }
+
     /// Handles node dragging functionality with left mouse button.
     fn handle_node_dragging(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
         if ui.input(|i| i.pointer.primary_down()) && !self.is_panning {
             if let Some(current_pos) = response.interact_pointer_pos() {
-                let canvas_pos = current_pos - self.canvas_offset;
+                let world_pos = self.screen_to_world(current_pos);
 
                 if self.dragging_node.is_none() {
                     // Start dragging if over a node
-                    if let Some(node_id) = self.find_node_at_position(canvas_pos) {
-                        self.start_node_drag(node_id, current_pos, canvas_pos);
+                    if let Some(node_id) = self.find_node_at_position(world_pos) {
+                        self.start_node_drag(node_id, current_pos, world_pos);
                     }
                 } else if let Some(dragging_id) = self.dragging_node {
                     // Continue dragging - update node position with grid snapping support
-                    self.update_dragged_node_position(dragging_id, canvas_pos, ui);
+                    self.update_dragged_node_position(dragging_id, world_pos, ui);
                 }
             }
         } else {
@@ -478,29 +518,39 @@ impl FlowchartApp {
     }
 
     /// Starts dragging the specified node.
-    fn start_node_drag(&mut self, node_id: NodeId, current_pos: egui::Pos2, canvas_pos: egui::Pos2) {
+    fn start_node_drag(&mut self, node_id: NodeId, current_pos: egui::Pos2, world_pos: egui::Pos2) {
         self.dragging_node = Some(node_id);
         self.drag_start_pos = Some(current_pos);
 
         // Calculate offset from node center to mouse position for smooth dragging
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             let node_center = egui::pos2(node.position.0, node.position.1);
-            self.node_drag_offset = node_center - canvas_pos;
+            self.node_drag_offset = node_center - world_pos;
         }
     }
 
     /// Updates the position of the currently dragged node.
-    fn update_dragged_node_position(&mut self, node_id: NodeId, canvas_pos: egui::Pos2, ui: &egui::Ui) {
-        let mut new_canvas_pos = canvas_pos + self.node_drag_offset;
+    fn update_dragged_node_position(&mut self, node_id: NodeId, world_pos: egui::Pos2, ui: &egui::Ui) {
+        let mut new_world_pos = world_pos + self.node_drag_offset;
 
         // Check if Shift is held for grid snapping
         if ui.input(|i| i.modifiers.shift) {
-            new_canvas_pos = self.snap_to_grid(new_canvas_pos);
+            new_world_pos = self.snap_to_grid(new_world_pos);
         }
 
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
-            node.position = (new_canvas_pos.x, new_canvas_pos.y);
+            node.position = (new_world_pos.x, new_world_pos.y);
         }
+    }
+
+    /// Converts screen coordinates to world coordinates accounting for zoom and pan.
+    fn screen_to_world(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
+        (screen_pos - self.canvas_offset) / self.zoom_factor
+    }
+
+    /// Converts world coordinates to screen coordinates accounting for zoom and pan.
+    fn world_to_screen(&self, world_pos: egui::Pos2) -> egui::Pos2 {
+        world_pos * self.zoom_factor + self.canvas_offset
     }
 
     /// Snaps a position to the nearest grid point.
@@ -516,22 +566,35 @@ impl FlowchartApp {
 
     /// Draws a grid on the canvas for visual reference.
     /// 
-    /// Grid lines are drawn every 20 units with a very subtle color.
+    /// Grid lines are drawn every 20 world units with zoom-aware spacing and styling.
     fn draw_grid(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
         const GRID_SIZE: f32 = 20.0;
-        let grid_color = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 32); // Light gray, more transparent
+        let grid_color = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 32);
         let stroke = egui::Stroke::new(1.0, grid_color);
 
-        // Calculate visible grid range accounting for canvas offset
-        let start_x = ((canvas_rect.min.x - self.canvas_offset.x) / GRID_SIZE).floor() * GRID_SIZE;
-        let end_x = ((canvas_rect.max.x - self.canvas_offset.x) / GRID_SIZE).ceil() * GRID_SIZE;
-        let start_y = ((canvas_rect.min.y - self.canvas_offset.y) / GRID_SIZE).floor() * GRID_SIZE;
-        let end_y = ((canvas_rect.max.y - self.canvas_offset.y) / GRID_SIZE).ceil() * GRID_SIZE;
+        // Calculate world space bounds from screen space
+        let top_left_world = self.screen_to_world(canvas_rect.min);
+        let bottom_right_world = self.screen_to_world(canvas_rect.max);
+
+        // Calculate grid range in world coordinates
+        let start_x = (top_left_world.x / GRID_SIZE).floor() * GRID_SIZE;
+        let end_x = (bottom_right_world.x / GRID_SIZE).ceil() * GRID_SIZE;
+        let start_y = (top_left_world.y / GRID_SIZE).floor() * GRID_SIZE;
+        let end_y = (bottom_right_world.y / GRID_SIZE).ceil() * GRID_SIZE;
+
+        // Only draw grid if zoom level makes it reasonable to see
+        let screen_grid_size = GRID_SIZE * self.zoom_factor;
+        if screen_grid_size < 2.0 {
+            // Grid too small to see clearly, skip drawing
+            return;
+        }
 
         // Draw vertical grid lines
         let mut x = start_x;
         while x <= end_x {
-            let screen_x = x + self.canvas_offset.x;
+            let world_pos = egui::pos2(x, 0.0);
+            let screen_x = self.world_to_screen(world_pos).x;
+
             if screen_x >= canvas_rect.min.x && screen_x <= canvas_rect.max.x {
                 painter.line_segment(
                     [egui::pos2(screen_x, canvas_rect.min.y), egui::pos2(screen_x, canvas_rect.max.y)],
@@ -544,7 +607,9 @@ impl FlowchartApp {
         // Draw horizontal grid lines
         let mut y = start_y;
         while y <= end_y {
-            let screen_y = y + self.canvas_offset.y;
+            let world_pos = egui::pos2(0.0, y);
+            let screen_y = self.world_to_screen(world_pos).y;
+
             if screen_y >= canvas_rect.min.y && screen_y <= canvas_rect.max.y {
                 painter.line_segment(
                     [egui::pos2(canvas_rect.min.x, screen_y), egui::pos2(canvas_rect.max.x, screen_y)],
@@ -552,6 +617,30 @@ impl FlowchartApp {
                 );
             }
             y += GRID_SIZE;
+        }
+
+        // Draw axis lines more prominently when zoomed in
+        if screen_grid_size > 10.0 {
+            let axis_color = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 80);
+            let axis_stroke = egui::Stroke::new(1.5, axis_color);
+
+            // Draw X axis (y=0)
+            let x_axis_screen_y = self.world_to_screen(egui::pos2(0.0, 0.0)).y;
+            if x_axis_screen_y >= canvas_rect.min.y && x_axis_screen_y <= canvas_rect.max.y {
+                painter.line_segment(
+                    [egui::pos2(canvas_rect.min.x, x_axis_screen_y), egui::pos2(canvas_rect.max.x, x_axis_screen_y)],
+                    axis_stroke,
+                );
+            }
+
+            // Draw Y axis (x=0)
+            let y_axis_screen_x = self.world_to_screen(egui::pos2(0.0, 0.0)).x;
+            if y_axis_screen_x >= canvas_rect.min.x && y_axis_screen_x <= canvas_rect.max.x {
+                painter.line_segment(
+                    [egui::pos2(y_axis_screen_x, canvas_rect.min.y), egui::pos2(y_axis_screen_x, canvas_rect.max.y)],
+                    axis_stroke,
+                );
+            }
         }
     }
 
@@ -578,17 +667,18 @@ impl FlowchartApp {
         // Left-click for selection (only if not dragging or panning)
         if response.clicked() && !self.is_panning && self.dragging_node.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let canvas_pos = pos - self.canvas_offset;
-                self.selected_node = self.find_node_at_position(canvas_pos);
+                let world_pos = self.screen_to_world(pos);
+                self.selected_node = self.find_node_at_position(world_pos);
                 self.editing_node_name = None; // Stop editing on click elsewhere
             }
         }
 
         // Right-click for context menu
         if response.secondary_clicked() && !self.is_panning && self.dragging_node.is_none() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let canvas_pos = pos - self.canvas_offset;
-                self.context_menu_pos = (canvas_pos.x, canvas_pos.y);
+            if let Some(screen_pos) = response.interact_pointer_pos() {
+                let world_pos = self.screen_to_world(screen_pos);
+                self.context_menu_screen_pos = (screen_pos.x, screen_pos.y);
+                self.context_menu_world_pos = (world_pos.x, world_pos.y);
                 self.show_context_menu = true;
                 self.context_menu_just_opened = true;
             }
@@ -597,14 +687,16 @@ impl FlowchartApp {
 
     /// Renders a connection between two nodes with animated messages.
     fn draw_connection(&self, painter: &egui::Painter, connection: &Connection) {
-        // Get node positions with canvas offset applied
-        let start_pos = self.flowchart.nodes.get(&connection.from)
-            .map(|n| egui::pos2(n.position.0, n.position.1) + self.canvas_offset)
-            .unwrap_or_else(|| egui::pos2(0.0, 0.0) + self.canvas_offset);
+        // Get node positions with zoom and canvas offset applied
+        let start_world = self.flowchart.nodes.get(&connection.from)
+            .map(|n| egui::pos2(n.position.0, n.position.1))
+            .unwrap_or_else(|| egui::pos2(0.0, 0.0));
+        let start_pos = self.world_to_screen(start_world);
 
-        let end_pos = self.flowchart.nodes.get(&connection.to)
-            .map(|n| egui::pos2(n.position.0, n.position.1) + self.canvas_offset)
-            .unwrap_or_else(|| egui::pos2(100.0, 100.0) + self.canvas_offset);
+        let end_world = self.flowchart.nodes.get(&connection.to)
+            .map(|n| egui::pos2(n.position.0, n.position.1))
+            .unwrap_or_else(|| egui::pos2(100.0, 100.0));
+        let end_pos = self.world_to_screen(end_world);
 
         // Draw the connection line
         painter.line_segment(
@@ -615,7 +707,8 @@ impl FlowchartApp {
         // Draw messages as animated dots along the connection
         for message in &connection.messages {
             let msg_pos = start_pos + (end_pos - start_pos) * message.position_along_edge;
-            painter.circle_filled(msg_pos, 3.0, egui::Color32::YELLOW);
+            let scaled_radius = 3.0 * self.zoom_factor;
+            painter.circle_filled(msg_pos, scaled_radius, egui::Color32::YELLOW);
         }
     }
 
@@ -623,9 +716,11 @@ impl FlowchartApp {
     fn draw_node(&self, painter: &egui::Painter, node: &FlowchartNode) {
         const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
 
-        // Apply canvas offset for proper positioning
-        let pos = egui::pos2(node.position.0, node.position.1) + self.canvas_offset;
-        let rect = egui::Rect::from_center_size(pos, NODE_SIZE);
+        // Apply zoom and canvas offset for proper positioning
+        let world_pos = egui::pos2(node.position.0, node.position.1);
+        let screen_pos = self.world_to_screen(world_pos);
+        let scaled_size = NODE_SIZE * self.zoom_factor;
+        let rect = egui::Rect::from_center_size(screen_pos, scaled_size);
 
         // Determine node color based on type
         let mut color = match node.node_type {
@@ -659,7 +754,7 @@ impl FlowchartApp {
         painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color));
 
         // Render wrapped node name text
-        self.draw_node_text(painter, node, pos, NODE_SIZE);
+        self.draw_node_text(painter, node, screen_pos, scaled_size);
     }
 
     /// Renders the node's name text with proper wrapping and positioning.
