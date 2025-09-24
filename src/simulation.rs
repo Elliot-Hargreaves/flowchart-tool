@@ -6,13 +6,16 @@
 
 use crate::types::*;
 use mlua::Lua;
+use serde::{Deserialize, Serialize};
 
 /// Engine responsible for running flowchart simulations.
 /// 
 /// The simulation engine processes nodes in sequence, handles message flow,
 /// and executes transformation scripts.
+#[derive(Serialize, Deserialize)]
 pub struct SimulationEngine {
     /// The Lua runtime environment for script execution
+    #[serde(skip)]
     lua: Lua,
 }
 

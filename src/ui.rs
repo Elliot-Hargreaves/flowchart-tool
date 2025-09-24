@@ -6,53 +6,77 @@
 use crate::types::*;
 use crate::simulation::SimulationEngine;
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 /// The main application structure containing UI state and the flowchart data.
 /// 
 /// This struct implements the `eframe::App` trait and handles all user interface
 /// rendering and interaction logic.
+#[derive(Serialize, Deserialize)]
 pub struct FlowchartApp {
     /// The flowchart being edited and simulated
     flowchart: Flowchart,
     /// Simulation engine for processing flowchart steps
+    #[serde(skip)]
     simulation_engine: SimulationEngine,
     /// Currently selected node ID, if any
+    #[serde(skip)]
     selected_node: Option<NodeId>,
     /// Whether the simulation is currently running
+    #[serde(skip)]
     is_simulation_running: bool,
     /// Speed multiplier for simulation (currently unused)
     simulation_speed: f32,
     /// Whether the context menu is currently visible
+    #[serde(skip)]
     show_context_menu: bool,
     /// Whether the grid should be displayed on the canvas
     show_grid: bool,
     /// Current zoom level (1.0 = normal, 2.0 = 2x zoom, 0.5 = 50% zoom)
     zoom_factor: f32,
     /// Screen position where the context menu should appear
+    #[serde(skip)]
     context_menu_screen_pos: (f32, f32),
     /// World position where nodes should be created from context menu
+    #[serde(skip)]
     context_menu_world_pos: (f32, f32),
     /// Counter for generating unique default node names
     node_counter: u32,
+    /// Current file path for save/load operations
+    #[serde(skip)]
+    current_file_path: Option<std::path::PathBuf>,
+    /// Flag indicating if the flowchart has unsaved changes
+    #[serde(skip)]
+    has_unsaved_changes: bool,
     /// Node currently being edited for name changes
+    #[serde(skip)]
     editing_node_name: Option<NodeId>,
     /// Temporary storage for node name while editing
+    #[serde(skip)]
     temp_node_name: String,
     /// Current canvas pan offset for navigation
+    #[serde(skip)]
     canvas_offset: egui::Vec2,
     /// Whether the user is currently panning the canvas
+    #[serde(skip)]
     is_panning: bool,
     /// Last mouse position during panning operation
+    #[serde(skip)]
     last_pan_pos: Option<egui::Pos2>,
     /// Flag to prevent context menu from closing immediately after opening
+    #[serde(skip)]
     context_menu_just_opened: bool,
     /// Flag indicating text should be selected in the name field
+    #[serde(skip)]
     should_select_text: bool,
     /// Node currently being dragged by the user
+    #[serde(skip)]
     dragging_node: Option<NodeId>,
     /// Initial mouse position when drag started
+    #[serde(skip)]
     drag_start_pos: Option<egui::Pos2>,
     /// Offset from mouse to node center during dragging
+    #[serde(skip)]
     node_drag_offset: egui::Vec2,
 }
 
@@ -70,6 +94,8 @@ impl Default for FlowchartApp {
             context_menu_screen_pos: (0.0, 0.0),
             context_menu_world_pos: (0.0, 0.0),
             node_counter: 0,
+            current_file_path: None,
+            has_unsaved_changes: false,
             editing_node_name: None,
             temp_node_name: String::new(),
             canvas_offset: egui::Vec2::ZERO,
@@ -125,12 +151,28 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
-    /// Renders the toolbar with simulation control buttons.
+    /// Renders the toolbar with file operations, simulation controls, and view options.
     /// 
-    /// The toolbar contains Start, Stop, and Step buttons for controlling
-    /// the flowchart simulation, plus a grid visibility toggle.
+    /// The toolbar contains file operations, simulation controls, and display options.
     fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            // File operations
+            if ui.button("New").clicked() {
+                self.new_flowchart();
+            }
+            if ui.button("Open").clicked() {
+                self.load_flowchart();
+            }
+            if ui.button("Save").clicked() {
+                self.save_flowchart();
+            }
+            if ui.button("Save As").clicked() {
+                self.save_as_flowchart();
+            }
+
+            ui.separator();
+
+            // Simulation controls
             if ui.button("Start").clicked() {
                 self.is_simulation_running = true;
                 self.flowchart.simulation_state = SimulationState::Running;
@@ -146,11 +188,26 @@ impl FlowchartApp {
                 }
             }
 
-            // Add spacing between simulation controls and grid toggle
             ui.separator();
 
-            // Grid visibility toggle checkbox
+            // View options
             ui.checkbox(&mut self.show_grid, "Show Grid");
+
+            // Show current file and unsaved changes indicator
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(file_path) = &self.current_file_path {
+                    let file_name = file_path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("unnamed");
+                    let status = if self.has_unsaved_changes { "*" } else { "" };
+                    ui.label(format!("{}{}", file_name, status));
+                } else {
+                    let status = if self.has_unsaved_changes { "Untitled*" } else { "Untitled" };
+                    ui.label(status);
+                }
+
+                ui.label(format!("Zoom: {:.0}%", self.zoom_factor * 100.0));
+            });
         });
     }
 
@@ -193,6 +250,16 @@ impl FlowchartApp {
                 self.draw_no_selection_info(ui);
             }
         });
+    }
+
+    /// Saves the flowchart to a JSON string.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Loads a flowchart from a JSON string.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
     }
 
     /// Renders the name editing field for a node.
@@ -240,6 +307,7 @@ impl FlowchartApp {
     fn save_node_name_change(&mut self, node_id: NodeId) {
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             node.name = self.temp_node_name.clone();
+            self.has_unsaved_changes = true;
         }
         self.editing_node_name = None;
     }
@@ -352,6 +420,88 @@ impl FlowchartApp {
         // Select the new node and start editing its name immediately
         self.selected_node = Some(node_id);
         self.start_editing_node_name(node_id, &format!("node{}", self.node_counter));
+
+        // Mark as having unsaved changes
+        self.has_unsaved_changes = true;
+    }
+
+    /// Saves the current flowchart to a file.
+    fn save_flowchart(&mut self) {
+        if let Some(file_path) = &self.current_file_path.clone() {
+            self.save_to_path(file_path.clone());
+        } else {
+            self.save_as_flowchart();
+        }
+    }
+
+    /// Opens a file dialog to save the flowchart with a new name.
+    fn save_as_flowchart(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .set_file_name("flowchart.json")
+            .save_file()
+        {
+            self.save_to_path(path);
+        }
+    }
+
+    /// Saves the flowchart to the specified path.
+    fn save_to_path(&mut self, path: std::path::PathBuf) {
+        match self.flowchart.to_json() {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&path, json) {
+                    eprintln!("Failed to save file: {}", e);
+                } else {
+                    self.current_file_path = Some(path);
+                    self.has_unsaved_changes = false;
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to serialize flowchart: {}", e);
+            }
+        }
+    }
+
+    /// Opens a file dialog to load a flowchart.
+    fn load_flowchart(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .pick_file()
+        {
+            match std::fs::read_to_string(&path) {
+                Ok(json) => {
+                    match Flowchart::from_json(&json) {
+                        Ok(flowchart) => {
+                            self.flowchart = flowchart;
+                            self.current_file_path = Some(path);
+                            self.has_unsaved_changes = false;
+                            self.selected_node = None;
+                            self.editing_node_name = None;
+                            // Update node counter to avoid ID conflicts
+                            self.node_counter = self.flowchart.nodes.len() as u32;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to parse flowchart: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to read file: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Creates a new empty flowchart.
+    fn new_flowchart(&mut self) {
+        self.flowchart = Flowchart::new();
+        self.current_file_path = None;
+        self.has_unsaved_changes = false;
+        self.selected_node = None;
+        self.editing_node_name = None;
+        self.node_counter = 0;
+        self.canvas_offset = egui::Vec2::ZERO;
+        self.zoom_factor = 1.0;
     }
 
     /// Finds the node at the given canvas position, if any.
@@ -477,9 +627,9 @@ impl FlowchartApp {
                 let world_pos_before_zoom = self.screen_to_world(mouse_pos);
 
                 // Apply zoom change with smaller, more precise steps
-                let zoom_multiplier = if scroll_delta > 0.0 { 1.05 } else { 1.0 / 1.05 };
+                let zoom_delta = if scroll_delta > 0.0 { 0.025 } else { -0.025 };
                 let old_zoom = self.zoom_factor;
-                self.zoom_factor = (self.zoom_factor * zoom_multiplier).clamp(0.1, 5.0);
+                self.zoom_factor = (self.zoom_factor + zoom_delta).clamp(0.25, 5.0);
 
                 // Only adjust offset if zoom actually changed
                 if (self.zoom_factor - old_zoom).abs() > f32::EPSILON {
@@ -760,11 +910,15 @@ impl FlowchartApp {
     /// Renders the node's name text with proper wrapping and positioning.
     fn draw_node_text(&self, painter: &egui::Painter, node: &FlowchartNode, pos: egui::Pos2, size: egui::Vec2) {
         let text_rect = egui::Rect::from_center_size(
-            egui::pos2(pos.x, pos.y - 5.0),
-            egui::vec2(size.x - 10.0, size.y - 20.0) // Leave padding
+            egui::pos2(pos.x, pos.y - 5.0 * self.zoom_factor),
+            egui::vec2(size.x - 10.0 * self.zoom_factor, size.y - 20.0 * self.zoom_factor) // Leave padding
         );
 
-        let font_id = egui::FontId::default();
+        // Create zoom-aware font size
+        let base_font_size = 12.0;
+        let scaled_font_size = (base_font_size * self.zoom_factor).clamp(8.0, 48.0);
+        let font_id = egui::FontId::proportional(scaled_font_size);
+
         let max_width = text_rect.width();
         let wrapped_text = self.wrap_text(&node.name, max_width, &font_id, painter);
 
