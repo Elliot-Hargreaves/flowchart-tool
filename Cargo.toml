@@ -1,0 +1,13 @@
+[package]
+name = "flowchart_tool"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+egui = "0.28"
+eframe = "0.28"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+mlua = { version = "0.9", features = ["lua54"] }  # For Lua scripting with Lua 5.4
+uuid = { version = "1.0", features = ["v4", "serde"] }
+env_logger = "0.10"
