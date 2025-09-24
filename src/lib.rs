@@ -149,10 +149,20 @@ impl FlowchartApp {
                         // Request focus and handle text selection
                         response.request_focus();
 
+                        // Select all text when the flag is set and field has focus
                         if self.should_select_text && response.has_focus() {
-                            // Select all text by setting cursor to end and selection to start
                             self.should_select_text = false;
-                            // In many cases, the text is automatically selected when focused
+
+                            // Access the text edit state and select all text
+                            ui.memory_mut(|mem| {
+                                let state = mem.data.get_temp_mut_or_default::<egui::text_edit::TextEditState>(response.id);
+                                let text_len = self.temp_node_name.len();
+                                // Create a selection from start to end of text
+                                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                                    egui::text::CCursor::new(0),
+                                    egui::text::CCursor::new(text_len),
+                                )));
+                            });
                         }
 
                         // Check for Enter key press while the field has focus
