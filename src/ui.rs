@@ -501,7 +501,7 @@ impl FlowchartApp {
     }
 
     /// Handles canvas click interactions for selection and context menu.
-    fn handle_canvas_interactions(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+    fn handle_canvas_interactions(&mut self, _ui: &mut egui::Ui, response: &egui::Response) {
         // Left-click for selection (only if not dragging or panning)
         if response.clicked() && !self.is_panning && self.dragging_node.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {

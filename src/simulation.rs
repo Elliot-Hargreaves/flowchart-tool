@@ -65,17 +65,20 @@ impl SimulationEngine {
             }
         }
 
-        // Process each node based on its type
-        for (_id, node) in &mut flowchart.nodes {
-            match &node.node_type {
-                NodeType::Producer { generation_rate } => {
-                    self.process_producer_node(node, *generation_rate, flowchart);
-                }
-                NodeType::Consumer { consumption_rate: _ } => {
-                    self.process_consumer_node(node);
-                }
-                NodeType::Transformer { script } => {
-                    self.process_transformer_node(node, script);
+        // Process each node based on its type - collect node IDs first to avoid borrow conflicts
+        let node_ids: Vec<_> = flowchart.nodes.keys().cloned().collect();
+        for node_id in node_ids {
+            if let Some(node) = flowchart.nodes.get_mut(&node_id) {
+                match &node.node_type.clone() {
+                    NodeType::Producer { generation_rate } => {
+                        self.process_producer_node(node, *generation_rate);
+                    }
+                    NodeType::Consumer { consumption_rate: _ } => {
+                        self.process_consumer_node(node);
+                    }
+                    NodeType::Transformer { script } => {
+                        self.process_transformer_node(node, script);
+                    }
                 }
             }
         }
@@ -89,8 +92,7 @@ impl SimulationEngine {
     /// 
     /// * `node` - The producer node to process
     /// * `generation_rate` - Number of messages to generate per step
-    /// * `flowchart` - The flowchart (for adding messages to outgoing connections)
-    fn process_producer_node(&self, node: &mut FlowchartNode, _generation_rate: u32, _flowchart: &mut Flowchart) {
+    fn process_producer_node(&self, node: &mut FlowchartNode, _generation_rate: u32) {
         // TODO: Implement message generation based on rate
         node.state = NodeState::Processing;
     }
@@ -111,7 +113,7 @@ impl SimulationEngine {
     /// 
     /// * `node` - The transformer node to process
     /// * `script` - The Lua script to execute
-    fn process_transformer_node(&self, node: &mut FlowchartNode, _script: &str) {
+    fn process_transformer_node(&self, node: &mut FlowchartNode, _script: &String) {
         // TODO: Implement script execution for transformation
         node.state = NodeState::Idle;
     }
@@ -215,11 +217,52 @@ pub fn execute_transformer_script(script: &str, input_message: &Message) -> Resu
     for pair in output_table.pairs::<i32, mlua::Table>() {
         let (_index, message_table) = pair?;
         if let Ok(data_value) = message_table.get::<_, mlua::Value>("data") {
-            // Convert Lua value to JSON
-            let json_str = lua.to_string(&data_value)?;
-            if let Ok(json_value) = serde_json::from_str(&json_str) {
-                result_messages.push(Message::new(json_value));
-            }
+            // Convert Lua value to JSON - simplified approach
+            let json_value = match data_value {
+                mlua::Value::Table(table) => {
+                    // For tables, try to convert to a simple JSON object
+                    let mut json_obj = serde_json::Map::new();
+                    for pair in table.pairs::<mlua::Value, mlua::Value>() {
+                        if let Ok((key, value)) = pair {
+                            // Convert key to string
+                            let key_string = match key {
+                                mlua::Value::String(s) => s.to_str().unwrap_or("unknown").to_string(),
+                                mlua::Value::Integer(i) => i.to_string(),
+                                mlua::Value::Number(n) => n.to_string(),
+                                _ => format!("{:?}", key),
+                            };
+
+                            // Convert value to JSON
+                            let json_val = match value {
+                                mlua::Value::String(s) => serde_json::Value::String(s.to_str().unwrap_or("").to_string()),
+                                mlua::Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(i)),
+                                mlua::Value::Number(n) => {
+                                    serde_json::Number::from_f64(n)
+                                        .map(serde_json::Value::Number)
+                                        .unwrap_or(serde_json::Value::Null)
+                                },
+                                mlua::Value::Boolean(b) => serde_json::Value::Bool(b),
+                                mlua::Value::Nil => serde_json::Value::Null,
+                                _ => serde_json::Value::String(format!("{:?}", value)),
+                            };
+                            json_obj.insert(key_string, json_val);
+                        }
+                    }
+                    serde_json::Value::Object(json_obj)
+                }
+                mlua::Value::String(s) => serde_json::Value::String(s.to_str().unwrap_or("").to_string()),
+                mlua::Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(i)),
+                mlua::Value::Number(n) => {
+                    serde_json::Number::from_f64(n)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null)
+                },
+                mlua::Value::Boolean(b) => serde_json::Value::Bool(b),
+                mlua::Value::Nil => serde_json::Value::Null,
+                _ => serde_json::json!({"converted": format!("{:?}", data_value)}),
+            };
+
+            result_messages.push(Message::new(json_value));
         }
     }
 
