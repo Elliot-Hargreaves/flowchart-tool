@@ -75,6 +75,8 @@ struct FlowchartApp {
     selected_node: Option<NodeId>,
     is_simulation_running: bool,
     simulation_speed: f32,
+    show_context_menu: bool,
+    context_menu_pos: (f32, f32),
 }
 
 impl eframe::App for FlowchartApp {
@@ -132,6 +134,68 @@ impl FlowchartApp {
         });
     }
 
+    fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
+        let menu_pos = egui::pos2(self.context_menu_pos.0, self.context_menu_pos.1);
+
+        egui::Area::new(egui::Id::new("context_menu"))
+            .fixed_pos(menu_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Create Node:");
+                        ui.separator();
+
+                        if ui.button("Producer").clicked() {
+                            self.create_node_at_pos(NodeType::Producer { generation_rate: 1 });
+                            self.show_context_menu = false;
+                        }
+
+                        if ui.button("Consumer").clicked() {
+                            self.create_node_at_pos(NodeType::Consumer { consumption_rate: 1 });
+                            self.show_context_menu = false;
+                        }
+
+                        if ui.button("Transformer").clicked() {
+                            self.create_node_at_pos(NodeType::Transformer { 
+                                script: "-- Lua transformation script\nreturn input".to_string() 
+                            });
+                            self.show_context_menu = false;
+                        }
+
+                        ui.separator();
+                        if ui.button("Cancel").clicked() {
+                            self.show_context_menu = false;
+                        }
+                    });
+                });
+            });
+
+        // Close menu if clicked elsewhere
+        if ui.input(|i| i.pointer.any_click()) {
+            // Check if click was outside the menu area
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                let menu_rect = egui::Rect::from_min_size(
+                    menu_pos, 
+                    egui::vec2(120.0, 100.0) // Approximate menu size
+                );
+                if !menu_rect.contains(pos) {
+                    self.show_context_menu = false;
+                }
+            }
+        }
+    }
+
+    fn create_node_at_pos(&mut self, node_type: NodeType) {
+        let new_node = FlowchartNode {
+            id: uuid::Uuid::new_v4(),
+            position: self.context_menu_pos,
+            node_type,
+            state: NodeState::Idle,
+        };
+
+        self.flowchart.nodes.insert(new_node.id, new_node);
+    }
+
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(
             ui.available_size(),
@@ -150,7 +214,20 @@ impl FlowchartApp {
 
         // Handle interactions
         if response.clicked() {
-            // Handle node selection, creation, etc.
+            // Handle node selection, etc.
+        }
+
+        // Handle right-click for context menu
+        if response.secondary_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                self.context_menu_pos = (pos.x, pos.y);
+                self.show_context_menu = true;
+            }
+        }
+
+        // Show context menu
+        if self.show_context_menu {
+            self.draw_context_menu(ui);
         }
     }
 
