@@ -24,6 +24,8 @@ pub struct FlowchartApp {
     simulation_speed: f32,
     /// Whether the context menu is currently visible
     show_context_menu: bool,
+    /// Whether the grid should be displayed on the canvas
+    show_grid: bool,
     /// Canvas position where the context menu should appear
     context_menu_pos: (f32, f32),
     /// Counter for generating unique default node names
@@ -59,6 +61,7 @@ impl Default for FlowchartApp {
             is_simulation_running: false,
             simulation_speed: 1.0,
             show_context_menu: false,
+            show_grid: true, // Grid enabled by default
             context_menu_pos: (0.0, 0.0),
             node_counter: 0,
             editing_node_name: None,
@@ -119,7 +122,7 @@ impl FlowchartApp {
     /// Renders the toolbar with simulation control buttons.
     /// 
     /// The toolbar contains Start, Stop, and Step buttons for controlling
-    /// the flowchart simulation.
+    /// the flowchart simulation, plus a grid visibility toggle.
     fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui.button("Start").clicked() {
@@ -136,6 +139,12 @@ impl FlowchartApp {
                     self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart);
                 }
             }
+
+            // Add spacing between simulation controls and grid toggle
+            ui.separator();
+
+            // Grid visibility toggle checkbox
+            ui.checkbox(&mut self.show_grid, "Show Grid");
         });
     }
 
@@ -414,7 +423,8 @@ impl FlowchartApp {
         self.handle_node_dragging(ui, &response);
 
         // Render all flowchart elements
-        self.render_flowchart_elements(&painter);
+        let canvas_rect = response.rect;
+        self.render_flowchart_elements(&painter, canvas_rect);
 
         // Handle other interactions (selection, context menu)
         self.handle_canvas_interactions(ui, &response);
@@ -456,8 +466,8 @@ impl FlowchartApp {
                         self.start_node_drag(node_id, current_pos, canvas_pos);
                     }
                 } else if let Some(dragging_id) = self.dragging_node {
-                    // Continue dragging - update node position
-                    self.update_dragged_node_position(dragging_id, canvas_pos);
+                    // Continue dragging - update node position with grid snapping support
+                    self.update_dragged_node_position(dragging_id, canvas_pos, ui);
                 }
             }
         } else {
@@ -480,16 +490,79 @@ impl FlowchartApp {
     }
 
     /// Updates the position of the currently dragged node.
-    fn update_dragged_node_position(&mut self, node_id: NodeId, canvas_pos: egui::Pos2) {
-        let new_canvas_pos = canvas_pos + self.node_drag_offset;
+    fn update_dragged_node_position(&mut self, node_id: NodeId, canvas_pos: egui::Pos2, ui: &egui::Ui) {
+        let mut new_canvas_pos = canvas_pos + self.node_drag_offset;
+
+        // Check if Shift is held for grid snapping
+        if ui.input(|i| i.modifiers.shift) {
+            new_canvas_pos = self.snap_to_grid(new_canvas_pos);
+        }
+
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             node.position = (new_canvas_pos.x, new_canvas_pos.y);
         }
     }
 
-    /// Renders all flowchart elements (connections and nodes).
-    fn render_flowchart_elements(&self, painter: &egui::Painter) {
-        // Draw connections first (behind nodes)
+    /// Snaps a position to the nearest grid point.
+    /// 
+    /// Grid spacing is 20 units.
+    fn snap_to_grid(&self, pos: egui::Pos2) -> egui::Pos2 {
+        const GRID_SIZE: f32 = 20.0;
+        egui::pos2(
+            (pos.x / GRID_SIZE).round() * GRID_SIZE,
+            (pos.y / GRID_SIZE).round() * GRID_SIZE,
+        )
+    }
+
+    /// Draws a grid on the canvas for visual reference.
+    /// 
+    /// Grid lines are drawn every 20 units with a very subtle color.
+    fn draw_grid(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
+        const GRID_SIZE: f32 = 20.0;
+        let grid_color = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 32); // Light gray, more transparent
+        let stroke = egui::Stroke::new(1.0, grid_color);
+
+        // Calculate visible grid range accounting for canvas offset
+        let start_x = ((canvas_rect.min.x - self.canvas_offset.x) / GRID_SIZE).floor() * GRID_SIZE;
+        let end_x = ((canvas_rect.max.x - self.canvas_offset.x) / GRID_SIZE).ceil() * GRID_SIZE;
+        let start_y = ((canvas_rect.min.y - self.canvas_offset.y) / GRID_SIZE).floor() * GRID_SIZE;
+        let end_y = ((canvas_rect.max.y - self.canvas_offset.y) / GRID_SIZE).ceil() * GRID_SIZE;
+
+        // Draw vertical grid lines
+        let mut x = start_x;
+        while x <= end_x {
+            let screen_x = x + self.canvas_offset.x;
+            if screen_x >= canvas_rect.min.x && screen_x <= canvas_rect.max.x {
+                painter.line_segment(
+                    [egui::pos2(screen_x, canvas_rect.min.y), egui::pos2(screen_x, canvas_rect.max.y)],
+                    stroke,
+                );
+            }
+            x += GRID_SIZE;
+        }
+
+        // Draw horizontal grid lines
+        let mut y = start_y;
+        while y <= end_y {
+            let screen_y = y + self.canvas_offset.y;
+            if screen_y >= canvas_rect.min.y && screen_y <= canvas_rect.max.y {
+                painter.line_segment(
+                    [egui::pos2(canvas_rect.min.x, screen_y), egui::pos2(canvas_rect.max.x, screen_y)],
+                    stroke,
+                );
+            }
+            y += GRID_SIZE;
+        }
+    }
+
+    /// Renders all flowchart elements (grid, connections and nodes).
+    fn render_flowchart_elements(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
+        // Draw grid first (behind everything) if enabled
+        if self.show_grid {
+            self.draw_grid(painter, canvas_rect);
+        }
+
+        // Draw connections second (behind nodes)
         for connection in &self.flowchart.connections {
             self.draw_connection(painter, connection);
         }
