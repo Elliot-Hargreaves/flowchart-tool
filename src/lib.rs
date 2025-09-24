@@ -81,6 +81,11 @@ struct FlowchartApp {
     node_counter: u32,
     editing_node_name: Option<NodeId>,
     temp_node_name: String,
+    canvas_offset: egui::Vec2,
+    is_panning: bool,
+    last_pan_pos: Option<egui::Pos2>,
+    context_menu_just_opened: bool,
+    should_select_text: bool,
 }
 
 impl eframe::App for FlowchartApp {
@@ -141,7 +146,17 @@ impl FlowchartApp {
                         // Show text edit field
                         let response = ui.text_edit_singleline(&mut self.temp_node_name);
 
-                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        // Request focus and handle text selection
+                        response.request_focus();
+
+                        if self.should_select_text && response.has_focus() {
+                            // Select all text by setting cursor to end and selection to start
+                            self.should_select_text = false;
+                            // In many cases, the text is automatically selected when focused
+                        }
+
+                        // Check for Enter key press while the field has focus
+                        if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             // Save the name change
                             if let Some(node) = self.flowchart.nodes.get_mut(&selected_id) {
                                 node.name = self.temp_node_name.clone();
@@ -151,16 +166,12 @@ impl FlowchartApp {
                             // Cancel editing if focus lost without Enter
                             self.editing_node_name = None;
                         }
-
-                        if response.gained_focus() {
-                            // Auto-select all text when starting to edit
-                            response.request_focus();
-                        }
                     } else {
                         // Show name as clickable label
                         if ui.button(&node.name).clicked() {
                             self.editing_node_name = Some(selected_id);
                             self.temp_node_name = node.name.clone();
+                            self.should_select_text = true;
                         }
                     }
 
@@ -202,10 +213,11 @@ impl FlowchartApp {
     }
 
     fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
-        let menu_pos = egui::pos2(self.context_menu_pos.0, self.context_menu_pos.1);
+        // Convert canvas coordinates to screen coordinates
+        let screen_pos = egui::pos2(self.context_menu_pos.0, self.context_menu_pos.1) + self.canvas_offset;
 
-        egui::Area::new(egui::Id::new("context_menu"))
-            .fixed_pos(menu_pos)
+        let area_response = egui::Area::new(egui::Id::new("context_menu"))
+            .fixed_pos(screen_pos)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.vertical(|ui| {
@@ -234,22 +246,24 @@ impl FlowchartApp {
                             self.show_context_menu = false;
                         }
                     });
-                });
+                })
             });
 
-        // Close menu if clicked elsewhere
-        if ui.input(|i| i.pointer.any_click()) {
-            // Check if click was outside the menu area
-            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                let menu_rect = egui::Rect::from_min_size(
-                    menu_pos, 
-                    egui::vec2(120.0, 100.0) // Approximate menu size
-                );
-                if !menu_rect.contains(pos) {
-                    self.show_context_menu = false;
+        // Only check for click-outside after the menu has been open for at least one frame
+        if !self.context_menu_just_opened {
+            // Close menu if clicked elsewhere (but not on secondary click to avoid conflicts)
+            if ui.input(|i| i.pointer.primary_clicked()) {
+                // Check if click was outside the menu area using the actual menu response
+                if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    if !area_response.response.rect.contains(click_pos) {
+                        self.show_context_menu = false;
+                    }
                 }
             }
         }
+
+        // Reset the just_opened flag after the first frame
+        self.context_menu_just_opened = false;
     }
 
     fn create_node_at_pos(&mut self, node_type: NodeType) {
@@ -270,6 +284,7 @@ impl FlowchartApp {
         self.selected_node = Some(node_id);
         self.editing_node_name = Some(node_id);
         self.temp_node_name = format!("node{}", self.node_counter);
+        self.should_select_text = true;
     }
 
     fn find_node_at_position(&self, pos: egui::Pos2) -> Option<NodeId> {
@@ -285,11 +300,71 @@ impl FlowchartApp {
         None
     }
 
+    fn wrap_text(&self, text: &str, max_width: f32, font_id: &egui::FontId, painter: &egui::Painter) -> Vec<String> {
+        let mut lines = Vec::new();
+        let words: Vec<&str> = text.split_whitespace().collect();
+
+        if words.is_empty() {
+            return vec![text.to_string()];
+        }
+
+        let mut current_line = String::new();
+
+        for word in words {
+            let test_line = if current_line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", current_line, word)
+            };
+
+            let text_width = painter.fonts(|f| f.layout_no_wrap(test_line.clone(), font_id.clone(), egui::Color32::BLACK).size().x);
+
+            if text_width <= max_width {
+                current_line = test_line;
+            } else {
+                if !current_line.is_empty() {
+                    lines.push(current_line);
+                    current_line = word.to_string();
+                } else {
+                    // Single word is too long, just add it anyway
+                    lines.push(word.to_string());
+                }
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        if lines.is_empty() {
+            lines.push(text.to_string());
+        }
+
+        lines
+    }
+
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(
             ui.available_size(),
             egui::Sense::click_and_drag()
         );
+
+        // Handle middle-click panning
+        if ui.input(|i| i.pointer.middle_down()) {
+            if let Some(current_pos) = response.interact_pointer_pos() {
+                if !self.is_panning {
+                    self.is_panning = true;
+                    self.last_pan_pos = Some(current_pos);
+                } else if let Some(last_pos) = self.last_pan_pos {
+                    let delta = current_pos - last_pos;
+                    self.canvas_offset += delta;
+                    self.last_pan_pos = Some(current_pos);
+                }
+            }
+        } else {
+            self.is_panning = false;
+            self.last_pan_pos = None;
+        }
 
         // Draw connections (arrows)
         for connection in &self.flowchart.connections {
@@ -302,19 +377,22 @@ impl FlowchartApp {
         }
 
         // Handle interactions
-        if response.clicked() {
+        if response.clicked() && !self.is_panning {
             // Check if we clicked on a node
             if let Some(pos) = response.interact_pointer_pos() {
-                self.selected_node = self.find_node_at_position(pos);
+                let canvas_pos = pos - self.canvas_offset;
+                self.selected_node = self.find_node_at_position(canvas_pos);
                 self.editing_node_name = None; // Stop editing if we click elsewhere
             }
         }
 
         // Handle right-click for context menu
-        if response.secondary_clicked() {
+        if response.secondary_clicked() && !self.is_panning {
             if let Some(pos) = response.interact_pointer_pos() {
-                self.context_menu_pos = (pos.x, pos.y);
+                let canvas_pos = pos - self.canvas_offset;
+                self.context_menu_pos = (canvas_pos.x, canvas_pos.y);
                 self.show_context_menu = true;
+                self.context_menu_just_opened = true;
             }
         }
 
@@ -325,14 +403,14 @@ impl FlowchartApp {
     }
 
     fn draw_connection(&self, painter: &egui::Painter, connection: &Connection) {
-        // Find start and end positions based on node positions
+        // Find start and end positions based on node positions with canvas offset
         let start_pos = self.flowchart.nodes.get(&connection.from)
-            .map(|n| egui::pos2(n.position.0, n.position.1))
-            .unwrap_or(egui::pos2(0.0, 0.0));
+            .map(|n| egui::pos2(n.position.0, n.position.1) + self.canvas_offset)
+            .unwrap_or(egui::pos2(0.0, 0.0) + self.canvas_offset);
 
         let end_pos = self.flowchart.nodes.get(&connection.to)
-            .map(|n| egui::pos2(n.position.0, n.position.1))
-            .unwrap_or(egui::pos2(100.0, 100.0));
+            .map(|n| egui::pos2(n.position.0, n.position.1) + self.canvas_offset)
+            .unwrap_or(egui::pos2(100.0, 100.0) + self.canvas_offset);
 
         painter.line_segment(
             [start_pos, end_pos],
@@ -347,7 +425,8 @@ impl FlowchartApp {
     }
 
     fn draw_node(&self, painter: &egui::Painter, node: &FlowchartNode) {
-        let pos = egui::pos2(node.position.0, node.position.1);
+        // Apply canvas offset
+        let pos = egui::pos2(node.position.0, node.position.1) + self.canvas_offset;
         let size = egui::vec2(100.0, 70.0);
         let rect = egui::Rect::from_center_size(pos, size);
 
@@ -369,18 +448,38 @@ impl FlowchartApp {
 
         painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color));
 
-        // Draw node name
-        let text_pos = egui::pos2(pos.x, pos.y - 5.0);
-        painter.text(
-            text_pos,
-            egui::Align2::CENTER_CENTER,
-            &node.name,
-            egui::FontId::default(),
-            egui::Color32::BLACK,
+        // Draw node name with text wrapping
+        let text_rect = egui::Rect::from_center_size(
+            egui::pos2(pos.x, pos.y - 5.0),
+            egui::vec2(size.x - 10.0, size.y - 20.0) // Leave some padding
         );
+
+        // Split text into lines that fit within the node width
+        let font_id = egui::FontId::default();
+        let max_width = text_rect.width();
+        let wrapped_text = self.wrap_text(&node.name, max_width, &font_id, painter);
+
+        // Draw each line of wrapped text
+        let line_height = painter.fonts(|f| f.row_height(&font_id));
+        let total_height = line_height * wrapped_text.len() as f32;
+        let start_y = text_rect.center().y - total_height / 2.0;
+
+        for (i, line) in wrapped_text.iter().enumerate() {
+            let line_pos = egui::pos2(
+                text_rect.center().x,
+                start_y + i as f32 * line_height
+            );
+            painter.text(
+                line_pos,
+                egui::Align2::CENTER_CENTER,
+                line,
+                font_id.clone(),
+                egui::Color32::BLACK,
+            );
+        }
     }
 
-    fn deliver_message_to_node(&mut self, node_id: NodeId, message: Message) {
+    fn deliver_message_to_node(&mut self, node_id: NodeId, _message: Message) {
         // Handle message delivery to the target node
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             match &node.node_type {
