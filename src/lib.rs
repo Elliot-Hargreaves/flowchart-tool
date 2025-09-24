@@ -86,6 +86,9 @@ struct FlowchartApp {
     last_pan_pos: Option<egui::Pos2>,
     context_menu_just_opened: bool,
     should_select_text: bool,
+    dragging_node: Option<NodeId>,
+    drag_start_pos: Option<egui::Pos2>,
+    node_drag_offset: egui::Vec2,
 }
 
 impl eframe::App for FlowchartApp {
@@ -376,6 +379,37 @@ impl FlowchartApp {
             self.last_pan_pos = None;
         }
 
+        // Handle node dragging
+        if ui.input(|i| i.pointer.primary_down()) && !self.is_panning {
+            if let Some(current_pos) = response.interact_pointer_pos() {
+                let canvas_pos = current_pos - self.canvas_offset;
+
+                if self.dragging_node.is_none() {
+                    // Start dragging if we're over a node
+                    if let Some(node_id) = self.find_node_at_position(canvas_pos) {
+                        self.dragging_node = Some(node_id);
+                        self.drag_start_pos = Some(current_pos);
+
+                        // Calculate offset from node center to mouse position
+                        if let Some(node) = self.flowchart.nodes.get(&node_id) {
+                            let node_center = egui::pos2(node.position.0, node.position.1);
+                            self.node_drag_offset = node_center - canvas_pos;
+                        }
+                    }
+                } else if let Some(dragging_id) = self.dragging_node {
+                    // Continue dragging - update node position
+                    let new_canvas_pos = canvas_pos + self.node_drag_offset;
+                    if let Some(node) = self.flowchart.nodes.get_mut(&dragging_id) {
+                        node.position = (new_canvas_pos.x, new_canvas_pos.y);
+                    }
+                }
+            }
+        } else {
+            // Stop dragging when mouse is released
+            self.dragging_node = None;
+            self.drag_start_pos = None;
+        }
+
         // Draw connections (arrows)
         for connection in &self.flowchart.connections {
             self.draw_connection(&painter, connection);
@@ -386,8 +420,8 @@ impl FlowchartApp {
             self.draw_node(&painter, node);
         }
 
-        // Handle interactions
-        if response.clicked() && !self.is_panning {
+        // Handle interactions (only if not dragging)
+        if response.clicked() && !self.is_panning && self.dragging_node.is_none() {
             // Check if we clicked on a node
             if let Some(pos) = response.interact_pointer_pos() {
                 let canvas_pos = pos - self.canvas_offset;
@@ -397,7 +431,7 @@ impl FlowchartApp {
         }
 
         // Handle right-click for context menu
-        if response.secondary_clicked() && !self.is_panning {
+        if response.secondary_clicked() && !self.is_panning && self.dragging_node.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let canvas_pos = pos - self.canvas_offset;
                 self.context_menu_pos = (canvas_pos.x, canvas_pos.y);
@@ -440,21 +474,32 @@ impl FlowchartApp {
         let size = egui::vec2(100.0, 70.0);
         let rect = egui::Rect::from_center_size(pos, size);
 
-        let color = match node.node_type {
+        let mut color = match node.node_type {
             NodeType::Producer { .. } => egui::Color32::LIGHT_GREEN,
             NodeType::Consumer { .. } => egui::Color32::LIGHT_RED,
             NodeType::Transformer { .. } => egui::Color32::LIGHT_BLUE,
         };
 
+        // Darken the color if being dragged
+        if Some(node.id) == self.dragging_node {
+            color = egui::Color32::from_rgba_unmultiplied(
+                (color.r() as f32 * 0.8) as u8,
+                (color.g() as f32 * 0.8) as u8,
+                (color.b() as f32 * 0.8) as u8,
+                color.a(),
+            );
+        }
+
         painter.rect_filled(rect, 5.0, color);
 
-        // Draw selection highlight
-        let stroke_color = if Some(node.id) == self.selected_node {
-            egui::Color32::YELLOW
+        // Draw selection highlight or drag highlight
+        let (stroke_color, stroke_width) = if Some(node.id) == self.dragging_node {
+            (egui::Color32::from_rgb(255, 165, 0), 4.0) // Orange color
+        } else if Some(node.id) == self.selected_node {
+            (egui::Color32::YELLOW, 3.0)
         } else {
-            egui::Color32::BLACK
+            (egui::Color32::BLACK, 2.0)
         };
-        let stroke_width = if Some(node.id) == self.selected_node { 3.0 } else { 2.0 };
 
         painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color));
 
