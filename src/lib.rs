@@ -26,6 +26,7 @@ pub enum SimulationState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowchartNode {
     pub id: NodeId,
+    pub name: String,
     pub position: (f32, f32),
     pub node_type: NodeType,
     pub state: NodeState,
@@ -77,6 +78,9 @@ struct FlowchartApp {
     simulation_speed: f32,
     show_context_menu: bool,
     context_menu_pos: (f32, f32),
+    node_counter: u32,
+    editing_node_name: Option<NodeId>,
+    temp_node_name: String,
 }
 
 impl eframe::App for FlowchartApp {
@@ -125,11 +129,74 @@ impl FlowchartApp {
 
     fn draw_properties_panel(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
-            ui.label("Properties");
+            ui.heading("Properties");
+            ui.separator();
+
             if let Some(selected_id) = self.selected_node {
-                if let Some(node) = self.flowchart.nodes.get(&selected_id) {
-                    ui.label(format!("Selected Node: {:?}", node.node_type));
+                if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
+                    // Node name editing
+                    ui.label("Name:");
+
+                    if self.editing_node_name == Some(selected_id) {
+                        // Show text edit field
+                        let response = ui.text_edit_singleline(&mut self.temp_node_name);
+
+                        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            // Save the name change
+                            if let Some(node) = self.flowchart.nodes.get_mut(&selected_id) {
+                                node.name = self.temp_node_name.clone();
+                            }
+                            self.editing_node_name = None;
+                        } else if response.lost_focus() {
+                            // Cancel editing if focus lost without Enter
+                            self.editing_node_name = None;
+                        }
+
+                        if response.gained_focus() {
+                            // Auto-select all text when starting to edit
+                            response.request_focus();
+                        }
+                    } else {
+                        // Show name as clickable label
+                        if ui.button(&node.name).clicked() {
+                            self.editing_node_name = Some(selected_id);
+                            self.temp_node_name = node.name.clone();
+                        }
+                    }
+
+                    ui.separator();
+
+                    // Node type
+                    ui.label(format!("Type: {}", match &node.node_type {
+                        NodeType::Producer { .. } => "Producer",
+                        NodeType::Consumer { .. } => "Consumer",
+                        NodeType::Transformer { .. } => "Transformer",
+                    }));
+
+                    // Node type specific properties
+                    match &node.node_type {
+                        NodeType::Producer { generation_rate } => {
+                            ui.label(format!("Generation Rate: {}", generation_rate));
+                        }
+                        NodeType::Consumer { consumption_rate } => {
+                            ui.label(format!("Consumption Rate: {}", consumption_rate));
+                        }
+                        NodeType::Transformer { script } => {
+                            ui.label("Script:");
+                            ui.text_edit_multiline(&mut script.clone());
+                        }
+                    }
+
+                    ui.separator();
+                    ui.label(format!("State: {:?}", node.state));
+                    ui.label(format!("Position: ({:.1}, {:.1})", node.position.0, node.position.1));
+                } else {
+                    ui.label("Node not found");
                 }
+            } else {
+                ui.label("No node selected");
+                ui.separator();
+                ui.label("Left-click on a node to select it");
             }
         });
     }
@@ -186,14 +253,36 @@ impl FlowchartApp {
     }
 
     fn create_node_at_pos(&mut self, node_type: NodeType) {
+        self.node_counter += 1;
+        let node_id = uuid::Uuid::new_v4();
+
         let new_node = FlowchartNode {
-            id: uuid::Uuid::new_v4(),
+            id: node_id,
+            name: format!("node{}", self.node_counter),
             position: self.context_menu_pos,
             node_type,
             state: NodeState::Idle,
         };
 
         self.flowchart.nodes.insert(new_node.id, new_node);
+
+        // Select the new node and start editing its name immediately
+        self.selected_node = Some(node_id);
+        self.editing_node_name = Some(node_id);
+        self.temp_node_name = format!("node{}", self.node_counter);
+    }
+
+    fn find_node_at_position(&self, pos: egui::Pos2) -> Option<NodeId> {
+        for (id, node) in &self.flowchart.nodes {
+            let node_pos = egui::pos2(node.position.0, node.position.1);
+            let size = egui::vec2(100.0, 70.0);
+            let rect = egui::Rect::from_center_size(node_pos, size);
+
+            if rect.contains(pos) {
+                return Some(*id);
+            }
+        }
+        None
     }
 
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
@@ -214,7 +303,11 @@ impl FlowchartApp {
 
         // Handle interactions
         if response.clicked() {
-            // Handle node selection, etc.
+            // Check if we clicked on a node
+            if let Some(pos) = response.interact_pointer_pos() {
+                self.selected_node = self.find_node_at_position(pos);
+                self.editing_node_name = None; // Stop editing if we click elsewhere
+            }
         }
 
         // Handle right-click for context menu
@@ -255,7 +348,7 @@ impl FlowchartApp {
 
     fn draw_node(&self, painter: &egui::Painter, node: &FlowchartNode) {
         let pos = egui::pos2(node.position.0, node.position.1);
-        let size = egui::vec2(80.0, 60.0);
+        let size = egui::vec2(100.0, 70.0);
         let rect = egui::Rect::from_center_size(pos, size);
 
         let color = match node.node_type {
@@ -265,7 +358,26 @@ impl FlowchartApp {
         };
 
         painter.rect_filled(rect, 5.0, color);
-        painter.rect_stroke(rect, 5.0, egui::Stroke::new(2.0, egui::Color32::BLACK));
+
+        // Draw selection highlight
+        let stroke_color = if Some(node.id) == self.selected_node {
+            egui::Color32::YELLOW
+        } else {
+            egui::Color32::BLACK
+        };
+        let stroke_width = if Some(node.id) == self.selected_node { 3.0 } else { 2.0 };
+
+        painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color));
+
+        // Draw node name
+        let text_pos = egui::pos2(pos.x, pos.y - 5.0);
+        painter.text(
+            text_pos,
+            egui::Align2::CENTER_CENTER,
+            &node.name,
+            egui::FontId::default(),
+            egui::Color32::BLACK,
+        );
     }
 
     fn deliver_message_to_node(&mut self, node_id: NodeId, message: Message) {
