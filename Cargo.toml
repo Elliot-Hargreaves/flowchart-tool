@@ -4,11 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-egui = "0.28"
-eframe = "0.28"
+egui = "0.32.3"
+eframe = "0.32.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-mlua = { version = "0.9", features = ["lua54"] }  # For Lua scripting with Lua 5.4
-uuid = { version = "1.0", features = ["v4", "serde"] }
-env_logger = "0.10"
-rfd = "0.11"  # For file dialogs
+#mlua = { version = "0.11.3", features = ["vendored", "luau"] }  # For Lua scripting with Lua 5.4
+uuid = { version = "1.0", features = ["v4", "serde", "js"] }
+env_logger = "0.11.8"
+rfd = "0.15.4"
+futures = "0.3.31"  # For file dialogs
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Document", "HtmlCanvasElement", "Window", "Element", "Request", "RequestInit", "RequestMode", "Response", "Headers"] }
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+
+[lib]
+crate-type = ["cdylib", "rlib"]

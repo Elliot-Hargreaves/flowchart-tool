@@ -6,6 +6,7 @@
 use crate::types::*;
 use crate::simulation::SimulationEngine;
 use eframe::egui;
+use eframe::epaint::StrokeKind;
 use serde::{Deserialize, Serialize};
 
 /// The main application structure containing UI state and the flowchart data.
@@ -44,7 +45,7 @@ pub struct FlowchartApp {
     node_counter: u32,
     /// Current file path for save/load operations
     #[serde(skip)]
-    current_file_path: Option<std::path::PathBuf>,
+    current_file_path: Option<String>,
     /// Flag indicating if the flowchart has unsaved changes
     #[serde(skip)]
     has_unsaved_changes: bool,
@@ -196,11 +197,8 @@ impl FlowchartApp {
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(file_path) = &self.current_file_path {
-                    let file_name = file_path.file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("unnamed");
                     let status = if self.has_unsaved_changes { "*" } else { "" };
-                    ui.label(format!("{}{}", file_name, status));
+                    ui.label(format!("{}{}", file_path, status));
                 } else {
                     let status = if self.has_unsaved_changes { "Untitled*" } else { "Untitled" };
                     ui.label(status);
@@ -428,7 +426,7 @@ impl FlowchartApp {
     /// Saves the current flowchart to a file.
     fn save_flowchart(&mut self) {
         if let Some(file_path) = &self.current_file_path.clone() {
-            self.save_to_path(file_path.clone());
+            self.save_to_path(file_path);
         } else {
             self.save_as_flowchart();
         }
@@ -436,23 +434,37 @@ impl FlowchartApp {
 
     /// Opens a file dialog to save the flowchart with a new name.
     fn save_as_flowchart(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("JSON", &["json"])
-            .set_file_name("flowchart.json")
-            .save_file()
-        {
-            self.save_to_path(path);
-        }
+        let mut file_dialog_future = async {
+            if let Some(path) = rfd::AsyncFileDialog::new()
+                .add_filter("JSON", &["json"])
+                .set_file_name("flowchart.json")
+                .save_file().await
+            {
+                let filename: String;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    filename = path.file_name();
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    filename = path.path().display().to_string();
+                }
+
+                self.save_to_path(&filename);
+            }
+        };
+        futures::executor::block_on(file_dialog_future);
     }
 
     /// Saves the flowchart to the specified path.
-    fn save_to_path(&mut self, path: std::path::PathBuf) {
+    fn save_to_path(&mut self, path: &str) {
         match self.flowchart.to_json() {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
                     eprintln!("Failed to save file: {}", e);
                 } else {
-                    self.current_file_path = Some(path);
+                    self.current_file_path = Some(path.to_string());
                     self.has_unsaved_changes = false;
                 }
             }
@@ -464,32 +476,46 @@ impl FlowchartApp {
 
     /// Opens a file dialog to load a flowchart.
     fn load_flowchart(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("JSON", &["json"])
-            .pick_file()
-        {
-            match std::fs::read_to_string(&path) {
-                Ok(json) => {
-                    match Flowchart::from_json(&json) {
-                        Ok(flowchart) => {
-                            self.flowchart = flowchart;
-                            self.current_file_path = Some(path);
-                            self.has_unsaved_changes = false;
-                            self.selected_node = None;
-                            self.editing_node_name = None;
-                            // Update node counter to avoid ID conflicts
-                            self.node_counter = self.flowchart.nodes.len() as u32;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to parse flowchart: {}", e);
+        let file_dialog_future = async {
+            if let Some(path) = rfd::AsyncFileDialog::new()
+                .add_filter("JSON", &["json"])
+                .pick_file().await
+            {
+                let filename: String;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    filename = path.file_name();
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    filename = path.path().display().to_string();
+                }
+
+                match std::fs::read_to_string(&filename) {
+                    Ok(json) => {
+                        match Flowchart::from_json(&json) {
+                            Ok(flowchart) => {
+                                self.flowchart = flowchart;
+                                self.current_file_path = Some(filename);
+                                self.has_unsaved_changes = false;
+                                self.selected_node = None;
+                                self.editing_node_name = None;
+                                // Update node counter to avoid ID conflicts
+                                self.node_counter = self.flowchart.nodes.len() as u32;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to parse flowchart: {}", e);
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    eprintln!("Failed to read file: {}", e);
+                    Err(e) => {
+                        eprintln!("Failed to read file: {}", e);
+                    }
                 }
             }
-        }
+        };
+        futures::executor::block_on(file_dialog_future);
     }
 
     /// Creates a new empty flowchart.
@@ -901,7 +927,7 @@ impl FlowchartApp {
             (egui::Color32::BLACK, 2.0) // Black for normal
         };
 
-        painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color));
+        painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color), StrokeKind::Outside);
 
         // Render wrapped node name text
         self.draw_node_text(painter, node, screen_pos, scaled_size);

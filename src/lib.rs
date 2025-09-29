@@ -26,9 +26,15 @@ pub use types::*;
 pub use simulation::*;
 use ui::FlowchartApp;
 
+#[cfg(target_arch = "wasm32")] // When compiling for web
+use {
+    eframe::wasm_bindgen::{self, prelude::*, JsCast},
+    web_sys::HtmlCanvasElement,
+};
+
 /// Runs the flowchart application with default settings.
 /// 
-/// This function initializes the egui application window and starts the main event loop.
+/// wasm function initializes the egui application window and starts the main event loop.
 /// 
 /// # Returns
 /// 
@@ -44,6 +50,40 @@ use ui::FlowchartApp;
 ///     run_app()
 /// }
 /// ```
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas = document.get_element_by_id(canvas_id).unwrap();
+    let canvas: HtmlCanvasElement = canvas.dyn_into::<HtmlCanvasElement>().unwrap();
+
+    let options = eframe::WebOptions::default();
+    eframe::WebRunner::new()
+        .start(canvas, options, Box::new(|_cc| Ok(Box::new(FlowchartApp::default()))))
+        .await?;
+    Ok(())
+}
+
+/// Runs the flowchart application with default settings.
+///
+/// This function initializes the egui application window and starts the main event loop.
+///
+/// # Returns
+///
+/// Returns `Ok(())` if the application runs successfully, or an `eframe::Error` if
+/// initialization fails.
+///
+/// # Example
+///
+/// ```no_run
+/// use flowchart_tool::run_app;
+///
+/// fn main() -> Result<(), eframe::Error> {
+///     run_app()
+/// }
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_app() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions::default();
     eframe::run_native(
