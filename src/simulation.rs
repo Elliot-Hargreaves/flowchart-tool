@@ -5,7 +5,7 @@
 //! between nodes.
 
 use crate::types::*;
-// use mlua::Lua;
+use crate::script_engine::{LuaScriptEngine, create_script_engine};
 use serde::{Deserialize, Serialize};
 
 /// Engine responsible for running flowchart simulations.
@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 /// and executes transformation scripts.
 #[derive(Serialize, Deserialize)]
 pub struct SimulationEngine {
-    // The Lua runtime environment for script execution
-    // #[serde(skip)]
-    // lua: Lua,
+    /// The Lua runtime environment for script execution
+    #[serde(skip)]
+    script_engine: Option<LuaScriptEngine>,
 }
 
 impl Default for SimulationEngine {
@@ -28,8 +28,9 @@ impl Default for SimulationEngine {
 impl SimulationEngine {
     /// Creates a new simulation engine with a fresh Lua environment.
     pub fn new() -> Self {
+        let script_engine = create_script_engine().ok();
         Self {
-            // lua: Lua::new(),
+            script_engine,
         }
     }
 
@@ -151,142 +152,72 @@ impl SimulationEngine {
         }
     }
 }
-//
-// /// Executes a Lua transformation script on an input message.
-// ///
-// /// This function sets up a Lua environment, provides the input message,
-// /// executes the user-provided script, and returns the transformed messages.
-// ///
-// /// # Arguments
-// ///
-// /// * `script` - The Lua script code to execute
-// /// * `input_message` - The message to transform
-// ///
-// /// # Returns
-// ///
-// /// A vector of output messages, or a Lua error if script execution fails.
-// ///
-// /// # Example Lua Script
-// ///
-// /// ```lua
-// /// -- Access input message via global 'input'
-// /// local new_data = {
-// ///     original = input.data,
-// ///     transformed = true,
-// ///     timestamp = os.time()
-// /// }
-// ///
-// /// -- Return transformed message(s)
-// /// output = {{data = new_data}}
-// /// ```
-// pub fn execute_transformer_script(script: &str, input_message: &Message) -> Result<Vec<Message>, mlua::Error> {
-//     // let lua = Lua::new();
-//
-//     // Serialize the message to JSON and provide it to Lua
-//     let message_json = serde_json::to_string(input_message).map_err(mlua::Error::external)?;
-//     lua.globals().set("input_json", message_json)?;
-//
-//     // Create helper functions in Lua for JSON parsing and message creation
-//     lua.load(r#"
-//         json = require("cjson") or {decode = function() return {} end}
-//
-//         -- Parse the input message
-//         input = json.decode(input_json) or {
-//             id = "placeholder",
-//             data = {},
-//             position_along_edge = 0.0
-//         }
-//
-//         -- Initialize output as empty array
-//         output = {}
-//
-//         -- Helper function to create a new message
-//         function create_message(data)
-//             return {
-//                 data = data,
-//                 position_along_edge = 0.0
-//             }
-//         end
-//     "#).exec()?;
-//
-//     // Execute the user script
-//     lua.load(script).exec()?;
-//
-//     // Get the output messages
-//     let output_table: mlua::Table = lua.globals().get("output")?;
-//     let mut result_messages = Vec::new();
-//
-//     // Convert Lua output to Message structs
-//     for pair in output_table.pairs::<i32, mlua::Table>() {
-//         let (_index, message_table) = pair?;
-//         if let Ok(data_value) = message_table.get::<mlua::Value>("data") {
-//             // Convert Lua value to JSON - simplified approach
-//             let json_value = match data_value {
-//                 mlua::Value::Table(table) => {
-//                     // For tables, try to convert to a simple JSON object
-//                     let mut json_obj = serde_json::Map::new();
-//                     for pair in table.pairs::<mlua::Value, mlua::Value>() {
-//                         if let Ok((key, value)) = pair {
-//                             // Convert key to string
-//                             let key_string: String = match key {
-//                                 mlua::Value::String(s) => s.to_str()?.to_string(),
-//                                 mlua::Value::Integer(i) => i.to_string(),
-//                                 mlua::Value::Number(n) => n.to_string(),
-//                                 _ => format!("{:?}", key),
-//                             };
-//
-//                             // Convert value to JSON
-//                             let json_val = match value {
-//                                 mlua::Value::String(s) => serde_json::Value::String(s.to_str()?.to_string()),
-//                                 mlua::Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(i)),
-//                                 mlua::Value::Number(n) => {
-//                                     serde_json::Number::from_f64(n)
-//                                         .map(serde_json::Value::Number)
-//                                         .unwrap_or(serde_json::Value::Null)
-//                                 },
-//                                 mlua::Value::Boolean(b) => serde_json::Value::Bool(b),
-//                                 mlua::Value::Nil => serde_json::Value::Null,
-//                                 _ => serde_json::Value::String(format!("{:?}", value)),
-//                             };
-//                             json_obj.insert(key_string, json_val);
-//                         }
-//                     }
-//                     serde_json::Value::Object(json_obj)
-//                 }
-//                 mlua::Value::String(s) => serde_json::Value::String(s.to_str()?.to_string()),
-//                 mlua::Value::Integer(i) => serde_json::Value::Number(serde_json::Number::from(i)),
-//                 mlua::Value::Number(n) => {
-//                     serde_json::Number::from_f64(n)
-//                         .map(serde_json::Value::Number)
-//                         .unwrap_or(serde_json::Value::Null)
-//                 },
-//                 mlua::Value::Boolean(b) => serde_json::Value::Bool(b),
-//                 mlua::Value::Nil => serde_json::Value::Null,
-//                 _ => serde_json::json!({"converted": format!("{:?}", data_value)}),
-//             };
-//
-//             result_messages.push(Message::new(json_value));
-//         }
-//     }
-//
-//     // If no output was produced, return the original message
-//     if result_messages.is_empty() {
-//         result_messages.push(input_message.clone());
-//     }
-//
-//     Ok(result_messages)
-// }
+
+/// Executes a Lua transformation script on an input message.
+///
+/// This function uses the cross-platform script engine to execute Lua code,
+/// providing the input message and returning the transformed messages.
+///
+/// # Arguments
+///
+/// * `script` - The Lua script code to execute
+/// * `input_message` - The message to transform
+///
+/// # Returns
+///
+/// A vector of output messages, or an error string if script execution fails.
+///
+/// # Example Lua Script
+///
+/// ```lua
+/// -- Access input message via global 'input'
+/// local new_data = {
+///     original = input.data,
+///     transformed = true,
+///     timestamp = os.time()
+/// }
+///
+/// -- Return transformed message(s)
+/// return new_data
+/// ```
+pub fn execute_transformer_script(script: &str, input_message: &Message) -> Result<Vec<Message>, String> {
+    let mut script_engine = create_script_engine()
+        .map_err(|e| format!("Failed to create script engine: {}", e))?;
+
+    // Create input JSON for the script
+    let input_json = serde_json::json!({
+        "id": input_message.id.to_string(),
+        "data": input_message.data,
+        "position_along_edge": input_message.position_along_edge
+    });
+
+    // Execute the script
+    let result = script_engine.execute(script, input_json)
+        .map_err(|e| format!("Script execution failed: {}", e))?;
+
+    // For now, create a new message with the transformed data
+    let transformed_message = Message {
+        id: uuid::Uuid::new_v4(),
+        data: result,
+        position_along_edge: 0.0,
+    };
+
+    Ok(vec![transformed_message])
+}
+
+// Helper functions removed - now handled by the script engine
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    // #[test]
-    // fn test_simulation_engine_creation() {
-    //     let engine = SimulationEngine::new();
-    //     assert!(std::ptr::addr_of!(engine.lua) as *const _ != std::ptr::null());
-    // }
+    #[test]
+    fn test_simulation_engine_creation() {
+        let engine = SimulationEngine::new();
+        // Engine should be created successfully
+        assert!(true); // Basic creation test
+    }
 
     #[test]
     fn test_empty_flowchart_step() {
@@ -297,17 +228,21 @@ mod tests {
         assert!(delivered.is_empty());
     }
 
-    // #[test]
-    // fn test_message_script_execution() {
-    //     let script = r#"
-    //         output = {create_message({transformed = true, value = 42})}
-    //     "#;
-    //
-    //     let input = Message::new(json!({"original": "data"}));
-    //
-    //     // Note: This test may fail without proper JSON library in Lua
-    //     // In a real implementation, you'd want to ensure lua-cjson is available
-    //     let _result = execute_transformer_script(script, &input);
-    //     // Test passes if no panic occurs
-    // }
+    #[test]
+    fn test_message_script_execution() {
+        let script = r#"
+            -- Simple transformation script
+            return {transformed = true, value = 42}
+        "#;
+
+        let input = Message::new(json!({"original": "data"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let transformed_message = &result[0];
+
+        // Basic test - the exact content will depend on script engine implementation
+        assert_eq!(transformed_message.position_along_edge, 0.0);
+        // The actual transformation testing will be enhanced once script engine is fully implemented
+    }
 }

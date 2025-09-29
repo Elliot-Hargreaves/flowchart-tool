@@ -50,7 +50,7 @@ pub enum NodeType {
     },
     /// A node that transforms messages using a Lua script
     Transformer { 
-        /// JavaScript code for message transformation
+        /// Lua script code for message transformation
         script: String 
     },
 }

@@ -18,6 +18,7 @@
 #![deny(unsafe_code)]
 
 mod types;
+pub mod script_engine;
 mod simulation;
 mod ui;
 
