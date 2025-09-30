@@ -1229,20 +1229,41 @@ impl FlowchartApp {
 
     /// Finalizes connection creation when mouse is released.
     fn finalize_connection(&mut self, world_pos: egui::Pos2) {
-        if let Some(from_node) = self.interaction.drawing_connection_from {
-            if let Some(to_node) = self.find_node_at_position(world_pos) {
+        if let Some(from_node_id) = self.interaction.drawing_connection_from {
+            if let Some(to_node_id) = self.find_node_at_position(world_pos) {
                 // Don't create self-connections
-                if from_node != to_node {
-                    // Check if connection already exists
-                    let connection_exists = self.flowchart.connections.iter().any(|c| {
-                        c.from == from_node && c.to == to_node
-                    });
+                if from_node_id != to_node_id {
+                    // Validate node types for connection rules
+                    let from_node = self.flowchart.nodes.get(&from_node_id);
+                    let to_node = self.flowchart.nodes.get(&to_node_id);
 
-                    if !connection_exists {
-                        // Create new connection
-                        let connection = Connection::new(from_node, to_node);
-                        self.flowchart.connections.push(connection);
-                        self.file.has_unsaved_changes = true;
+                    if let (Some(from), Some(to)) = (from_node, to_node) {
+                        // Check if connection is allowed based on node types
+                        let is_valid_connection = match (&from.node_type, &to.node_type) {
+                            // Consumer cannot send (cannot be source)
+                            (NodeType::Consumer { .. }, _) => false,
+                            // Producer cannot receive (cannot be target)
+                            (_, NodeType::Producer { .. }) => false,
+                            // All other combinations are valid (Transformer can send/receive, Producer can send, Consumer can receive)
+                            _ => true,
+                        };
+
+                        if !is_valid_connection {
+                            // Invalid connection type, don't create it
+                            return;
+                        }
+
+                        // Check if connection already exists
+                        let connection_exists = self.flowchart.connections.iter().any(|c| {
+                            c.from == from_node_id && c.to == to_node_id
+                        });
+
+                        if !connection_exists {
+                            // Create new connection
+                            let connection = Connection::new(from_node_id, to_node_id);
+                            self.flowchart.connections.push(connection);
+                            self.file.has_unsaved_changes = true;
+                        }
                     }
                 }
             }
