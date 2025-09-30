@@ -891,7 +891,13 @@ impl FlowchartApp {
             egui::Sense::click_and_drag()
         );
 
-        // Handle canvas panning with middle mouse button
+        // Initialize canvas to center the origin on first frame
+        if self.canvas.offset == egui::Vec2::ZERO && self.node_counter == 0 {
+            let canvas_center = response.rect.center();
+            self.canvas.offset = canvas_center.to_vec2();
+        }
+
+        // Handle canvas panning with middle mouse button or Ctrl+drag
         self.handle_canvas_panning(ui, &response);
 
         // Handle scroll wheel zooming
@@ -913,9 +919,15 @@ impl FlowchartApp {
         }
     }
 
-    /// Handles middle-click canvas panning functionality.
+    /// Handles middle-click or Cmd/Ctrl+left-click canvas panning functionality.
+    /// Uses Cmd on macOS and Ctrl on other platforms.
     fn handle_canvas_panning(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
-        if ui.input(|i| i.pointer.middle_down()) {
+        // Check for middle mouse button OR Cmd/Ctrl+left mouse button
+        // modifiers.command automatically uses Cmd on macOS and Ctrl elsewhere
+        let should_pan = ui.input(|i| i.pointer.middle_down() || 
+                                      (i.pointer.primary_down() && i.modifiers.command));
+
+        if should_pan {
             if let Some(current_pos) = response.interact_pointer_pos() {
                 if !self.interaction.is_panning {
                     self.interaction.is_panning = true;
