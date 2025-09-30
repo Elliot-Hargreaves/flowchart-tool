@@ -8,6 +8,7 @@ use crate::simulation::SimulationEngine;
 use eframe::egui;
 use eframe::epaint::StrokeKind;
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 /// The main application structure containing UI state and the flowchart data.
 ///
@@ -84,6 +85,11 @@ pub struct FlowchartApp {
     pending_save_operation: Option<PendingSaveOperation>,
     #[serde(skip)]
     pending_load_operation: Option<PendingLoadOperation>,
+    /// Channel for receiving file operation results from async contexts
+    #[serde(skip)]
+    file_operation_sender: Option<Sender<FileOperationResult>>,
+    #[serde(skip)]
+    file_operation_receiver: Option<Receiver<FileOperationResult>>,
 }
 
 #[derive(Debug)]
@@ -97,8 +103,17 @@ enum PendingLoadOperation {
     Load,
 }
 
+/// Messages sent from async file operations back to the main app
+#[derive(Debug)]
+enum FileOperationResult {
+    SaveCompleted(String), // path
+    LoadCompleted(String, String), // path, content
+    OperationFailed(String), // error message
+}
+
 impl Default for FlowchartApp {
     fn default() -> Self {
+        let (sender, receiver) = channel();
         Self {
             flowchart: Flowchart::default(),
             simulation_engine: SimulationEngine::new(),
@@ -125,6 +140,8 @@ impl Default for FlowchartApp {
             node_drag_offset: egui::Vec2::ZERO,
             pending_save_operation: None,
             pending_load_operation: None,
+            file_operation_sender: Some(sender),
+            file_operation_receiver: Some(receiver),
         }
     }
 }
@@ -175,10 +192,44 @@ impl eframe::App for FlowchartApp {
 impl FlowchartApp {
     /// Handle pending file operations for WASM compatibility
     fn handle_pending_operations(&mut self, ctx: &egui::Context) {
+        // First, process any completed file operations from the channel
+        if let Some(receiver) = &self.file_operation_receiver {
+            while let Ok(result) = receiver.try_recv() {
+                match result {
+                    FileOperationResult::SaveCompleted(path) => {
+                        self.current_file_path = Some(path);
+                        self.has_unsaved_changes = false;
+                        println!("File saved successfully");
+                    }
+                    FileOperationResult::LoadCompleted(path, content) => {
+                        match Flowchart::from_json(&content) {
+                            Ok(flowchart) => {
+                                self.flowchart = flowchart;
+                                self.current_file_path = Some(path);
+                                self.has_unsaved_changes = false;
+                                self.selected_node = None;
+                                self.editing_node_name = None;
+                                // Update node counter to avoid ID conflicts
+                                self.node_counter = self.flowchart.nodes.len() as u32;
+                                println!("File loaded successfully");
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to parse flowchart: {}", e);
+                            }
+                        }
+                    }
+                    FileOperationResult::OperationFailed(error) => {
+                        eprintln!("File operation failed: {}", error);
+                    }
+                }
+            }
+        }
+
         // Handle pending save operations
         if let Some(save_op) = self.pending_save_operation.take() {
             let ctx = ctx.clone();
             let flowchart_json = self.flowchart.to_json().unwrap_or_default();
+            let sender = self.file_operation_sender.clone();
 
             match save_op {
                 PendingSaveOperation::SaveAs => {
@@ -191,15 +242,41 @@ impl FlowchartApp {
                         {
                             #[cfg(target_arch = "wasm32")]
                             {
-                                let _ = handle.write(flowchart_json.as_bytes()).await;
-                                // In WASM, we can't easily update the app state from here
-                                // You might want to use a channel or other mechanism
+                                match handle.write(flowchart_json.as_bytes()).await {
+                                    Ok(_) => {
+                                        let filename = handle.file_name();
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::SaveCompleted(filename));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::OperationFailed(
+                                                format!("Failed to write file: {}", e)
+                                            ));
+                                        }
+                                    }
+                                }
                             }
 
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                if let Err(e) = std::fs::write(handle.path(), flowchart_json) {
-                                    eprintln!("Failed to save file: {}", e);
+                                let path = handle.path();
+                                match std::fs::write(path, flowchart_json) {
+                                    Ok(_) => {
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::SaveCompleted(
+                                                path.display().to_string()
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::OperationFailed(
+                                                format!("Failed to save file: {}", e)
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -212,8 +289,19 @@ impl FlowchartApp {
                         wasm_bindgen_futures::spawn_local(async move {
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                if let Err(e) = std::fs::write(&path, flowchart_json) {
-                                    eprintln!("Failed to save file: {}", e);
+                                match std::fs::write(&path, flowchart_json) {
+                                    Ok(_) => {
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::SaveCompleted(path));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if let Some(tx) = sender {
+                                            let _ = tx.send(FileOperationResult::OperationFailed(
+                                                format!("Failed to save file: {}", e)
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                             ctx.request_repaint();
@@ -228,6 +316,8 @@ impl FlowchartApp {
         // Handle pending load operations
         if let Some(_load_op) = self.pending_load_operation.take() {
             let ctx = ctx.clone();
+            let sender = self.file_operation_sender.clone();
+
             wasm_bindgen_futures::spawn_local(async move {
                 if let Some(handle) = rfd::AsyncFileDialog::new()
                     .add_filter("JSON", &["json"])
@@ -237,22 +327,41 @@ impl FlowchartApp {
                     #[cfg(target_arch = "wasm32")]
                     {
                         let content = handle.read().await;
-                        if let Ok(json_str) = String::from_utf8(content) {
-                            // In WASM, we can't easily update the app state from here
-                            // You might want to store this in browser storage or use a channel
-                            eprintln!("File loaded: {}", json_str);
+                        match String::from_utf8(content) {
+                            Ok(json_str) => {
+                                let filename = handle.file_name();
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::LoadCompleted(filename, json_str));
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::OperationFailed(
+                                        format!("Failed to read file as UTF-8: {}", e)
+                                    ));
+                                }
+                            }
                         }
                     }
 
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        match std::fs::read_to_string(handle.path()) {
+                        let path = handle.path();
+                        match std::fs::read_to_string(path) {
                             Ok(json) => {
-                                // Same issue - can't update app state from async context
-                                eprintln!("File content: {}", json);
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::LoadCompleted(
+                                        path.display().to_string(),
+                                        json
+                                    ));
+                                }
                             }
                             Err(e) => {
-                                eprintln!("Failed to read file: {}", e);
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::OperationFailed(
+                                        format!("Failed to read file: {}", e)
+                                    ));
+                                }
                             }
                         }
                     }
