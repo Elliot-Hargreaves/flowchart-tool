@@ -1,7 +1,7 @@
 [package]
 name = "flowchart_tool"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 egui = "0.32.3"
@@ -13,13 +13,18 @@ env_logger = "0.11.8"
 rfd = "0.15.4"
 futures = "0.3.31"  # For file dialogs
 wasm-bindgen-futures = "0.4.54"  # For file dialogs
-piccolo = "0.3.3"
+boa_engine = "0.19"
+
+getrandom = { version = "0.3.3" , features = ["wasm_js"]}
+getrandom2 = { version = "0.2.16", package = "getrandom", features = ["js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["Document", "HtmlCanvasElement", "Window", "Element", "Request", "RequestInit", "RequestMode", "Response", "Headers"] }
 js-sys = "0.3"
-wasm-bindgen-futures = "0.4"
-getrandom = { version = "0.2", features = ["js"] }
+
+[target.'cfg(target_arch = "wasm32")']
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"'] #, '--cfg', 'getrandom_backend="js"']
+
 
 [lib]
 crate-type = ["cdylib", "rlib"]

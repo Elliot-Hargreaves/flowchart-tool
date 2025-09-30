@@ -4,7 +4,7 @@
 //! connected by directional arrows. Supports three types of nodes:
 //! - **Producers**: Generate messages at specified rates
 //! - **Consumers**: Consume and destroy messages
-//! - **Transformers**: Execute Lua scripts to transform messages
+//! - **Transformers**: Execute JavaScript scripts to transform messages
 //! 
 //! ## Features
 //! - Interactive node creation, selection, and repositioning

@@ -5,7 +5,7 @@
 //! between nodes.
 
 use crate::types::*;
-use crate::script_engine::{LuaScriptEngine, create_script_engine};
+use crate::script_engine::{JavaScriptEngine, create_script_engine};
 use serde::{Deserialize, Serialize};
 
 /// Engine responsible for running flowchart simulations.
@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 /// and executes transformation scripts.
 #[derive(Serialize, Deserialize)]
 pub struct SimulationEngine {
-    /// The Lua runtime environment for script execution
+    /// The JavaScript runtime environment for script execution
     #[serde(skip)]
-    script_engine: Option<LuaScriptEngine>,
+    script_engine: Option<JavaScriptEngine>,
 }
 
 impl Default for SimulationEngine {
@@ -116,7 +116,7 @@ impl SimulationEngine {
     /// # Arguments
     /// 
     /// * `node` - The transformer node to process
-    /// * `script` - The Lua script to execute
+    /// * `script` - The JavaScript script to execute
     fn process_transformer_node(&self, node: &mut FlowchartNode, _script: &String) {
         // TODO: Implement script execution for transformation
         node.state = NodeState::Idle;
@@ -153,32 +153,32 @@ impl SimulationEngine {
     }
 }
 
-/// Executes a Lua transformation script on an input message.
+/// Executes a JavaScript transformation script on an input message.
 ///
-/// This function uses the cross-platform script engine to execute Lua code,
+/// This function uses the cross-platform script engine to execute JavaScript code,
 /// providing the input message and returning the transformed messages.
 ///
 /// # Arguments
 ///
-/// * `script` - The Lua script code to execute
+/// * `script` - The JavaScript script code to execute
 /// * `input_message` - The message to transform
 ///
 /// # Returns
 ///
 /// A vector of output messages, or an error string if script execution fails.
 ///
-/// # Example Lua Script
+/// # Example JavaScript Script
 ///
-/// ```lua
-/// -- Access input message via global 'input'
-/// local new_data = {
-///     original = input.data,
-///     transformed = true,
-///     timestamp = os.time()
-/// }
+/// ```javascript
+/// // Access input message via global 'input'
+/// const new_data = {
+///     original: input.data,
+///     transformed: true,
+///     timestamp: Date.now()
+/// };
 ///
-/// -- Return transformed message(s)
-/// return new_data
+/// // Return transformed message(s)
+/// new_data;
 /// ```
 pub fn execute_transformer_script(script: &str, input_message: &Message) -> Result<Vec<Message>, String> {
     let mut script_engine = create_script_engine()
@@ -231,8 +231,8 @@ mod tests {
     #[test]
     fn test_message_script_execution() {
         let script = r#"
-            -- Simple transformation script
-            return {transformed = true, value = 42}
+            // Simple transformation script
+            ({transformed: true, value: 42})
         "#;
 
         let input = Message::new(json!({"original": "data"}));
