@@ -165,7 +165,7 @@ impl SimulationEngine {
 ///
 /// # Returns
 ///
-/// A vector of output messages, or an error string if script execution fails.
+/// A vector of output messages or an error string if script execution fails.
 ///
 /// # Example JavaScript Script
 ///
@@ -216,7 +216,7 @@ mod tests {
     fn test_simulation_engine_creation() {
         let engine = SimulationEngine::new();
         // Engine should be created successfully
-        assert!(true); // Basic creation test
+        assert!(engine.script_engine.is_some()); // Basic creation test
     }
 
     #[test]

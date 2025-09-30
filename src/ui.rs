@@ -10,64 +10,40 @@ use eframe::epaint::StrokeKind;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Sender, Receiver};
 
-/// The main application structure containing UI state and the flowchart data.
-///
-/// This struct implements the `eframe::App` trait and handles all user interface
-/// rendering and interaction logic.
+/// State related to canvas navigation and display
 #[derive(Serialize, Deserialize)]
-pub struct FlowchartApp {
-    /// The flowchart being edited and simulated
-    flowchart: Flowchart,
-    /// Simulation engine for processing flowchart steps
+struct CanvasState {
+    /// Current canvas pan offset for navigation
     #[serde(skip)]
-    simulation_engine: SimulationEngine,
+    offset: egui::Vec2,
+    /// Current zoom level (1.0 = normal, 2.0 = 2x zoom, 0.5 = 50% zoom)
+    zoom_factor: f32,
+    /// Whether the grid should be displayed on the canvas
+    show_grid: bool,
+}
+
+impl Default for CanvasState {
+    fn default() -> Self {
+        Self {
+            offset: egui::Vec2::ZERO,
+            zoom_factor: 1.0,
+            show_grid: true,
+        }
+    }
+}
+
+/// State related to user interactions with nodes and canvas
+#[derive(Serialize, Deserialize)]
+struct InteractionState {
     /// Currently selected node ID, if any
     #[serde(skip)]
     selected_node: Option<NodeId>,
-    /// Whether the simulation is currently running
-    #[serde(skip)]
-    is_simulation_running: bool,
-    /// Speed multiplier for simulation (currently unused)
-    simulation_speed: f32,
-    /// Whether the context menu is currently visible
-    #[serde(skip)]
-    show_context_menu: bool,
-    /// Whether the grid should be displayed on the canvas
-    show_grid: bool,
-    /// Current zoom level (1.0 = normal, 2.0 = 2x zoom, 0.5 = 50% zoom)
-    zoom_factor: f32,
-    /// Screen position where the context menu should appear
-    #[serde(skip)]
-    context_menu_screen_pos: (f32, f32),
-    /// World position where nodes should be created from context menu
-    #[serde(skip)]
-    context_menu_world_pos: (f32, f32),
-    /// Counter for generating unique default node names
-    node_counter: u32,
-    /// Current file path for save/load operations
-    #[serde(skip)]
-    current_file_path: Option<String>,
-    /// Flag indicating if the flowchart has unsaved changes
-    #[serde(skip)]
-    has_unsaved_changes: bool,
     /// Node currently being edited for name changes
     #[serde(skip)]
     editing_node_name: Option<NodeId>,
     /// Temporary storage for node name while editing
     #[serde(skip)]
     temp_node_name: String,
-    /// Current canvas pan offset for navigation
-    #[serde(skip)]
-    canvas_offset: egui::Vec2,
-    /// Whether the user is currently panning the canvas
-    #[serde(skip)]
-    is_panning: bool,
-    /// Last mouse position during panning operation
-    #[serde(skip)]
-    last_pan_pos: Option<egui::Pos2>,
-    /// Flag to prevent context menu from closing immediately after opening
-    #[serde(skip)]
-    context_menu_just_opened: bool,
     /// Flag indicating text should be selected in the name field
     #[serde(skip)]
     should_select_text: bool,
@@ -80,6 +56,67 @@ pub struct FlowchartApp {
     /// Offset from mouse to node center during dragging
     #[serde(skip)]
     node_drag_offset: egui::Vec2,
+    /// Whether the user is currently panning the canvas
+    #[serde(skip)]
+    is_panning: bool,
+    /// Last mouse position during panning operation
+    #[serde(skip)]
+    last_pan_pos: Option<egui::Pos2>,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            selected_node: None,
+            editing_node_name: None,
+            temp_node_name: String::new(),
+            should_select_text: false,
+            dragging_node: None,
+            drag_start_pos: None,
+            node_drag_offset: egui::Vec2::ZERO,
+            is_panning: false,
+            last_pan_pos: None,
+        }
+    }
+}
+
+/// State related to context menu display and interaction
+#[derive(Serialize, Deserialize)]
+struct ContextMenuState {
+    /// Whether the context menu is currently visible
+    #[serde(skip)]
+    show: bool,
+    /// Screen position where the context menu should appear
+    #[serde(skip)]
+    screen_pos: (f32, f32),
+    /// World position where nodes should be created from context menu
+    #[serde(skip)]
+    world_pos: (f32, f32),
+    /// Flag to prevent context menu from closing immediately after opening
+    #[serde(skip)]
+    just_opened: bool,
+}
+
+impl Default for ContextMenuState {
+    fn default() -> Self {
+        Self {
+            show: false,
+            screen_pos: (0.0, 0.0),
+            world_pos: (0.0, 0.0),
+            just_opened: false,
+        }
+    }
+}
+
+/// State related to file operations and persistence
+#[derive(Serialize, Deserialize)]
+struct FileState {
+    /// Current file path for save/load operations
+    #[serde(skip)]
+    current_path: Option<String>,
+    /// Flag indicating if the flowchart has unsaved changes
+    #[serde(skip)]
+    has_unsaved_changes: bool,
     /// Pending file operations for WASM compatibility
     #[serde(skip)]
     pending_save_operation: Option<PendingSaveOperation>,
@@ -90,6 +127,48 @@ pub struct FlowchartApp {
     file_operation_sender: Option<Sender<FileOperationResult>>,
     #[serde(skip)]
     file_operation_receiver: Option<Receiver<FileOperationResult>>,
+}
+
+impl Default for FileState {
+    fn default() -> Self {
+        let (sender, receiver) = channel();
+        Self {
+            current_path: None,
+            has_unsaved_changes: false,
+            pending_save_operation: None,
+            pending_load_operation: None,
+            file_operation_sender: Some(sender),
+            file_operation_receiver: Some(receiver),
+        }
+    }
+}
+
+/// The main application structure containing UI state and the flowchart data.
+///
+/// This struct implements the `eframe::App` trait and handles all user interface
+/// rendering and interaction logic.
+#[derive(Serialize, Deserialize)]
+pub struct FlowchartApp {
+    /// The flowchart being edited and simulated
+    flowchart: Flowchart,
+    /// Simulation engine for processing flowchart steps
+    #[serde(skip)]
+    simulation_engine: SimulationEngine,
+    /// Whether the simulation is currently running
+    #[serde(skip)]
+    is_simulation_running: bool,
+    /// Speed multiplier for simulation (currently unused)
+    simulation_speed: f32,
+    /// Counter for generating unique default node names
+    node_counter: u32,
+    /// Canvas navigation and display state
+    canvas: CanvasState,
+    /// User interaction state
+    interaction: InteractionState,
+    /// Context menu state
+    context_menu: ContextMenuState,
+    /// File operations state
+    file: FileState,
 }
 
 #[derive(Debug)]
@@ -113,35 +192,16 @@ enum FileOperationResult {
 
 impl Default for FlowchartApp {
     fn default() -> Self {
-        let (sender, receiver) = channel();
         Self {
             flowchart: Flowchart::default(),
             simulation_engine: SimulationEngine::new(),
-            selected_node: None,
             is_simulation_running: false,
             simulation_speed: 1.0,
-            show_context_menu: false,
-            show_grid: true, // Grid enabled by default
-            zoom_factor: 1.0, // Normal zoom level
-            context_menu_screen_pos: (0.0, 0.0),
-            context_menu_world_pos: (0.0, 0.0),
             node_counter: 0,
-            current_file_path: None,
-            has_unsaved_changes: false,
-            editing_node_name: None,
-            temp_node_name: String::new(),
-            canvas_offset: egui::Vec2::ZERO,
-            is_panning: false,
-            last_pan_pos: None,
-            context_menu_just_opened: false,
-            should_select_text: false,
-            dragging_node: None,
-            drag_start_pos: None,
-            node_drag_offset: egui::Vec2::ZERO,
-            pending_save_operation: None,
-            pending_load_operation: None,
-            file_operation_sender: Some(sender),
-            file_operation_receiver: Some(receiver),
+            canvas: CanvasState::default(),
+            interaction: InteractionState::default(),
+            context_menu: ContextMenuState::default(),
+            file: FileState::default(),
         }
     }
 }
@@ -193,22 +253,22 @@ impl FlowchartApp {
     /// Handle pending file operations for WASM compatibility
     fn handle_pending_operations(&mut self, ctx: &egui::Context) {
         // First, process any completed file operations from the channel
-        if let Some(receiver) = &self.file_operation_receiver {
+        if let Some(receiver) = &self.file.file_operation_receiver {
             while let Ok(result) = receiver.try_recv() {
                 match result {
                     FileOperationResult::SaveCompleted(path) => {
-                        self.current_file_path = Some(path);
-                        self.has_unsaved_changes = false;
+                        self.file.current_path = Some(path);
+                        self.file.has_unsaved_changes = false;
                         println!("File saved successfully");
                     }
                     FileOperationResult::LoadCompleted(path, content) => {
                         match Flowchart::from_json(&content) {
                             Ok(flowchart) => {
                                 self.flowchart = flowchart;
-                                self.current_file_path = Some(path);
-                                self.has_unsaved_changes = false;
-                                self.selected_node = None;
-                                self.editing_node_name = None;
+                                self.file.current_path = Some(path);
+                                self.file.has_unsaved_changes = false;
+                                self.interaction.selected_node = None;
+                                self.interaction.editing_node_name = None;
                                 // Update node counter to avoid ID conflicts
                                 self.node_counter = self.flowchart.nodes.len() as u32;
                                 println!("File loaded successfully");
@@ -226,10 +286,10 @@ impl FlowchartApp {
         }
 
         // Handle pending save operations
-        if let Some(save_op) = self.pending_save_operation.take() {
+        if let Some(save_op) = self.file.pending_save_operation.take() {
             let ctx = ctx.clone();
             let flowchart_json = self.flowchart.to_json().unwrap_or_default();
-            let sender = self.file_operation_sender.clone();
+            let sender = self.file.file_operation_sender.clone();
 
             match save_op {
                 PendingSaveOperation::SaveAs => {
@@ -284,7 +344,7 @@ impl FlowchartApp {
                     });
                 }
                 PendingSaveOperation::Save => {
-                    if let Some(ref path) = self.current_file_path.clone() {
+                    if let Some(ref path) = self.file.current_path.clone() {
                         let path = path.clone();
                         wasm_bindgen_futures::spawn_local(async move {
                             #[cfg(not(target_arch = "wasm32"))]
@@ -307,16 +367,16 @@ impl FlowchartApp {
                             ctx.request_repaint();
                         });
                     } else {
-                        self.pending_save_operation = Some(PendingSaveOperation::SaveAs);
+                        self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
                     }
                 }
             }
         }
 
         // Handle pending load operations
-        if let Some(_load_op) = self.pending_load_operation.take() {
+        if let Some(_load_op) = self.file.pending_load_operation.take() {
             let ctx = ctx.clone();
-            let sender = self.file_operation_sender.clone();
+            let sender = self.file.file_operation_sender.clone();
 
             wasm_bindgen_futures::spawn_local(async move {
                 if let Some(handle) = rfd::AsyncFileDialog::new()
@@ -410,19 +470,19 @@ impl FlowchartApp {
             ui.separator();
 
             // View options
-            ui.checkbox(&mut self.show_grid, "Show Grid");
+            ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
 
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(file_path) = &self.current_file_path {
-                    let status = if self.has_unsaved_changes { "*" } else { "" };
+                if let Some(file_path) = &self.file.current_path {
+                    let status = if self.file.has_unsaved_changes { "*" } else { "" };
                     ui.label(format!("{}{}", file_path, status));
                 } else {
-                    let status = if self.has_unsaved_changes { "Untitled*" } else { "Untitled" };
+                    let status = if self.file.has_unsaved_changes { "Untitled*" } else { "Untitled" };
                     ui.label(status);
                 }
 
-                ui.label(format!("Zoom: {:.0}%", self.zoom_factor * 100.0));
+                ui.label(format!("Zoom: {:.0}%", self.canvas.zoom_factor * 100.0));
             });
         });
     }
@@ -436,12 +496,12 @@ impl FlowchartApp {
             ui.heading("Properties");
             ui.separator();
 
-            if let Some(selected_id) = self.selected_node {
+            if let Some(selected_id) = self.interaction.selected_node {
                 if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
                     // Node name editing
                     ui.label("Name:");
 
-                    if self.editing_node_name == Some(selected_id) {
+                    if self.interaction.editing_node_name == Some(selected_id) {
                         self.draw_name_editor(ui, selected_id);
                     } else {
                         // Show name as clickable button
@@ -480,14 +540,14 @@ impl FlowchartApp {
 
     /// Renders the name editing field for a node.
     fn draw_name_editor(&mut self, ui: &mut egui::Ui, selected_id: NodeId) {
-        let response = ui.text_edit_singleline(&mut self.temp_node_name);
+        let response = ui.text_edit_singleline(&mut self.interaction.temp_node_name);
 
         // Auto-focus the text field
         response.request_focus();
 
         // Select all text when flag is set and field has focus
-        if self.should_select_text && response.has_focus() {
-            self.should_select_text = false;
+        if self.interaction.should_select_text && response.has_focus() {
+            self.interaction.should_select_text = false;
             self.select_all_text_in_field(ui, response.id);
         }
 
@@ -496,7 +556,7 @@ impl FlowchartApp {
             self.save_node_name_change(selected_id);
         } else if response.lost_focus() {
             // Cancel editing if focus lost without Enter
-            self.editing_node_name = None;
+            self.interaction.editing_node_name = None;
         }
     }
 
@@ -504,7 +564,7 @@ impl FlowchartApp {
     fn select_all_text_in_field(&self, ui: &mut egui::Ui, field_id: egui::Id) {
         ui.memory_mut(|mem| {
             let state = mem.data.get_temp_mut_or_default::<egui::text_edit::TextEditState>(field_id);
-            let text_len = self.temp_node_name.len();
+            let text_len = self.interaction.temp_node_name.len();
             state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
                 egui::text::CCursor::new(0),
                 egui::text::CCursor::new(text_len),
@@ -514,18 +574,18 @@ impl FlowchartApp {
 
     /// Starts editing the name of the specified node.
     fn start_editing_node_name(&mut self, node_id: NodeId, current_name: &str) {
-        self.editing_node_name = Some(node_id);
-        self.temp_node_name = current_name.to_string();
-        self.should_select_text = true;
+        self.interaction.editing_node_name = Some(node_id);
+        self.interaction.temp_node_name = current_name.to_string();
+        self.interaction.should_select_text = true;
     }
 
     /// Saves the current name edit to the selected node.
     fn save_node_name_change(&mut self, node_id: NodeId) {
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
-            node.name = self.temp_node_name.clone();
-            self.has_unsaved_changes = true;
+            node.name = self.interaction.temp_node_name.clone();
+            self.file.has_unsaved_changes = true;
         }
-        self.editing_node_name = None;
+        self.interaction.editing_node_name = None;
     }
 
     /// Renders node type information and type-specific properties.
@@ -571,7 +631,7 @@ impl FlowchartApp {
     /// Renders the right-click context menu for creating nodes.
     fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
         // Use the stored screen coordinates for menu positioning
-        let screen_pos = egui::pos2(self.context_menu_screen_pos.0, self.context_menu_screen_pos.1);
+        let screen_pos = egui::pos2(self.context_menu.screen_pos.0, self.context_menu.screen_pos.1);
 
         let area_response = egui::Area::new(egui::Id::new("context_menu"))
             .fixed_pos(screen_pos)
@@ -583,41 +643,41 @@ impl FlowchartApp {
 
                         if ui.button("Producer").clicked() {
                             self.create_node_at_pos(NodeType::Producer { generation_rate: 1 });
-                            self.show_context_menu = false;
+                            self.context_menu.show = false;
                         }
 
                         if ui.button("Consumer").clicked() {
                             self.create_node_at_pos(NodeType::Consumer { consumption_rate: 1 });
-                            self.show_context_menu = false;
+                            self.context_menu.show = false;
                         }
 
                         if ui.button("Transformer").clicked() {
                             self.create_node_at_pos(NodeType::Transformer {
                                 script: "// Transform the input message\nfunction transform(input) {\n    return { data: input.data };\n}".to_string()
                             });
-                            self.show_context_menu = false;
+                            self.context_menu.show = false;
                         }
 
                         ui.separator();
                         if ui.button("Cancel").clicked() {
-                            self.show_context_menu = false;
+                            self.context_menu.show = false;
                         }
                     });
                 })
             });
 
         // Handle click-outside-to-close after the first frame
-        if !self.context_menu_just_opened {
+        if !self.context_menu.just_opened {
             if ui.input(|i| i.pointer.primary_clicked()) {
                 if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
                     if !area_response.response.rect.contains(click_pos) {
-                        self.show_context_menu = false;
+                        self.context_menu.show = false;
                     }
                 }
             }
         }
 
-        self.context_menu_just_opened = false;
+        self.context_menu.just_opened = false;
     }
 
     /// Creates a new node at the context menu position.
@@ -626,7 +686,7 @@ impl FlowchartApp {
 
         let new_node = FlowchartNode::new(
             format!("node{}", self.node_counter),
-            self.context_menu_world_pos,
+            self.context_menu.world_pos,
             node_type,
         );
 
@@ -634,18 +694,18 @@ impl FlowchartApp {
         self.flowchart.add_node(new_node);
 
         // Select the new node and start editing its name immediately
-        self.selected_node = Some(node_id);
+        self.interaction.selected_node = Some(node_id);
         self.start_editing_node_name(node_id, &format!("node{}", self.node_counter));
 
         // Mark as having unsaved changes
-        self.has_unsaved_changes = true;
+        self.file.has_unsaved_changes = true;
     }
 
     /// Opens a file dialog to save the flowchart with a new name.
     fn save_as_flowchart(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            self.pending_save_operation = Some(PendingSaveOperation::SaveAs);
+            self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -673,8 +733,8 @@ impl FlowchartApp {
                     if let Err(e) = std::fs::write(&path, json) {
                         eprintln!("Failed to save file: {}", e);
                     } else {
-                        self.current_file_path = Some(path.to_string());
-                        self.has_unsaved_changes = false;
+                        self.file.current_path = Some(path.to_string());
+                        self.file.has_unsaved_changes = false;
                     }
                 }
                 Err(e) => {
@@ -694,7 +754,7 @@ impl FlowchartApp {
     fn load_flowchart(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            self.pending_load_operation = Some(PendingLoadOperation::Load);
+            self.file.pending_load_operation = Some(PendingLoadOperation::Load);
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -710,10 +770,10 @@ impl FlowchartApp {
                             match Flowchart::from_json(&json) {
                                 Ok(flowchart) => {
                                     self.flowchart = flowchart;
-                                    self.current_file_path = Some(filename);
-                                    self.has_unsaved_changes = false;
-                                    self.selected_node = None;
-                                    self.editing_node_name = None;
+                                    self.file.current_path = Some(filename);
+                                    self.file.has_unsaved_changes = false;
+                                    self.interaction.selected_node = None;
+                                    self.interaction.editing_node_name = None;
                                     // Update node counter to avoid ID conflicts
                                     self.node_counter = self.flowchart.nodes.len() as u32;
                                 }
@@ -734,15 +794,15 @@ impl FlowchartApp {
 
     /// Saves the current flowchart to a file.
     fn save_flowchart(&mut self) {
-        if self.current_file_path.is_some() {
+        if self.file.current_path.is_some() {
             #[cfg(target_arch = "wasm32")]
             {
-                self.pending_save_operation = Some(PendingSaveOperation::Save);
+                self.file.pending_save_operation = Some(PendingSaveOperation::Save);
             }
 
             #[cfg(not(target_arch = "wasm32"))]
             {
-                if let Some(file_path) = &self.current_file_path.clone() {
+                if let Some(file_path) = &self.file.current_path.clone() {
                     self.save_to_path(file_path);
                 }
             }
@@ -754,13 +814,13 @@ impl FlowchartApp {
     /// Creates a new empty flowchart.
     fn new_flowchart(&mut self) {
         self.flowchart = Flowchart::new();
-        self.current_file_path = None;
-        self.has_unsaved_changes = false;
-        self.selected_node = None;
-        self.editing_node_name = None;
+        self.file.current_path = None;
+        self.file.has_unsaved_changes = false;
+        self.interaction.selected_node = None;
+        self.interaction.editing_node_name = None;
         self.node_counter = 0;
-        self.canvas_offset = egui::Vec2::ZERO;
-        self.zoom_factor = 1.0;
+        self.canvas.offset = egui::Vec2::ZERO;
+        self.canvas.zoom_factor = 1.0;
     }
 
     /// Finds the node at the given canvas position, if any.
@@ -848,7 +908,7 @@ impl FlowchartApp {
         self.handle_canvas_interactions(ui, &response);
 
         // Show context menu if active
-        if self.show_context_menu {
+        if self.context_menu.show {
             self.draw_context_menu(ui);
         }
     }
@@ -857,18 +917,18 @@ impl FlowchartApp {
     fn handle_canvas_panning(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
         if ui.input(|i| i.pointer.middle_down()) {
             if let Some(current_pos) = response.interact_pointer_pos() {
-                if !self.is_panning {
-                    self.is_panning = true;
-                    self.last_pan_pos = Some(current_pos);
-                } else if let Some(last_pos) = self.last_pan_pos {
+                if !self.interaction.is_panning {
+                    self.interaction.is_panning = true;
+                    self.interaction.last_pan_pos = Some(current_pos);
+                } else if let Some(last_pos) = self.interaction.last_pan_pos {
                     let delta = current_pos - last_pos;
-                    self.canvas_offset += delta;
-                    self.last_pan_pos = Some(current_pos);
+                    self.canvas.offset += delta;
+                    self.interaction.last_pan_pos = Some(current_pos);
                 }
             }
         } else {
-            self.is_panning = false;
-            self.last_pan_pos = None;
+            self.interaction.is_panning = false;
+            self.interaction.last_pan_pos = None;
         }
     }
 
@@ -887,17 +947,17 @@ impl FlowchartApp {
 
                 // Apply zoom change with smaller, more precise steps
                 let zoom_delta = if scroll_delta > 0.0 { 0.025 } else { -0.025 };
-                let old_zoom = self.zoom_factor;
-                self.zoom_factor = (self.zoom_factor + zoom_delta).clamp(0.25, 5.0);
+                let old_zoom = self.canvas.zoom_factor;
+                self.canvas.zoom_factor = (self.canvas.zoom_factor + zoom_delta).clamp(0.25, 5.0);
 
                 // Only adjust offset if zoom actually changed
-                if (self.zoom_factor - old_zoom).abs() > f32::EPSILON {
+                if (self.canvas.zoom_factor - old_zoom).abs() > f32::EPSILON {
                     // Calculate where that world position should appear on screen after zoom
                     let world_pos_after_zoom = self.world_to_screen(world_pos_before_zoom);
 
                     // Adjust canvas offset to keep the world position under the mouse cursor
                     let offset_adjustment = mouse_pos - world_pos_after_zoom;
-                    self.canvas_offset += offset_adjustment;
+                    self.canvas.offset += offset_adjustment;
                 }
             }
         }
@@ -905,42 +965,42 @@ impl FlowchartApp {
 
     /// Handles node dragging functionality with left mouse button.
     fn handle_node_dragging(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
-        if ui.input(|i| i.pointer.primary_down()) && !self.is_panning {
+        if ui.input(|i| i.pointer.primary_down()) && !self.interaction.is_panning {
             if let Some(current_pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(current_pos);
 
-                if self.dragging_node.is_none() {
+                if self.interaction.dragging_node.is_none() {
                     // Start dragging if over a node
                     if let Some(node_id) = self.find_node_at_position(world_pos) {
                         self.start_node_drag(node_id, current_pos, world_pos);
                     }
-                } else if let Some(dragging_id) = self.dragging_node {
+                } else if let Some(dragging_id) = self.interaction.dragging_node {
                     // Continue dragging - update node position with grid snapping support
                     self.update_dragged_node_position(dragging_id, world_pos, ui);
                 }
             }
         } else {
             // Stop dragging when mouse released
-            self.dragging_node = None;
-            self.drag_start_pos = None;
+            self.interaction.dragging_node = None;
+            self.interaction.drag_start_pos = None;
         }
     }
 
     /// Starts dragging the specified node.
     fn start_node_drag(&mut self, node_id: NodeId, current_pos: egui::Pos2, world_pos: egui::Pos2) {
-        self.dragging_node = Some(node_id);
-        self.drag_start_pos = Some(current_pos);
+        self.interaction.dragging_node = Some(node_id);
+        self.interaction.drag_start_pos = Some(current_pos);
 
         // Calculate offset from node center to mouse position for smooth dragging
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             let node_center = egui::pos2(node.position.0, node.position.1);
-            self.node_drag_offset = node_center - world_pos;
+            self.interaction.node_drag_offset = node_center - world_pos;
         }
     }
 
     /// Updates the position of the currently dragged node.
     fn update_dragged_node_position(&mut self, node_id: NodeId, world_pos: egui::Pos2, ui: &egui::Ui) {
-        let mut new_world_pos = world_pos + self.node_drag_offset;
+        let mut new_world_pos = world_pos + self.interaction.node_drag_offset;
 
         // Check if Shift is held for grid snapping
         if ui.input(|i| i.modifiers.shift) {
@@ -954,12 +1014,12 @@ impl FlowchartApp {
 
     /// Converts screen coordinates to world coordinates accounting for zoom and pan.
     fn screen_to_world(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
-        (screen_pos - self.canvas_offset) / self.zoom_factor
+        (screen_pos - self.canvas.offset) / self.canvas.zoom_factor
     }
 
     /// Converts world coordinates to screen coordinates accounting for zoom and pan.
     fn world_to_screen(&self, world_pos: egui::Pos2) -> egui::Pos2 {
-        world_pos * self.zoom_factor + self.canvas_offset
+        world_pos * self.canvas.zoom_factor + self.canvas.offset
     }
 
     /// Snaps a position to the nearest grid point.
@@ -992,7 +1052,7 @@ impl FlowchartApp {
         let end_y = (bottom_right_world.y / GRID_SIZE).ceil() * GRID_SIZE;
 
         // Only draw grid if zoom level makes it reasonable to see
-        let screen_grid_size = GRID_SIZE * self.zoom_factor;
+        let screen_grid_size = GRID_SIZE * self.canvas.zoom_factor;
         if screen_grid_size < 2.0 {
             // Grid too small to see clearly, skip drawing
             return;
@@ -1056,7 +1116,7 @@ impl FlowchartApp {
     /// Renders all flowchart elements (grid, connections and nodes).
     fn render_flowchart_elements(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
         // Draw grid first (behind everything) if enabled
-        if self.show_grid {
+        if self.canvas.show_grid {
             self.draw_grid(painter, canvas_rect);
         }
 
@@ -1074,22 +1134,22 @@ impl FlowchartApp {
     /// Handles canvas click interactions for selection and context menu.
     fn handle_canvas_interactions(&mut self, _ui: &mut egui::Ui, response: &egui::Response) {
         // Left-click for selection (only if not dragging or panning)
-        if response.clicked() && !self.is_panning && self.dragging_node.is_none() {
+        if response.clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(pos);
-                self.selected_node = self.find_node_at_position(world_pos);
-                self.editing_node_name = None; // Stop editing on click elsewhere
+                self.interaction.selected_node = self.find_node_at_position(world_pos);
+                self.interaction.editing_node_name = None; // Stop editing on click elsewhere
             }
         }
 
         // Right-click for context menu
-        if response.secondary_clicked() && !self.is_panning && self.dragging_node.is_none() {
+        if response.secondary_clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
             if let Some(screen_pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(screen_pos);
-                self.context_menu_screen_pos = (screen_pos.x, screen_pos.y);
-                self.context_menu_world_pos = (world_pos.x, world_pos.y);
-                self.show_context_menu = true;
-                self.context_menu_just_opened = true;
+                self.context_menu.screen_pos = (screen_pos.x, screen_pos.y);
+                self.context_menu.world_pos = (world_pos.x, world_pos.y);
+                self.context_menu.show = true;
+                self.context_menu.just_opened = true;
             }
         }
     }
@@ -1116,7 +1176,7 @@ impl FlowchartApp {
         // Draw messages as animated dots along the connection
         for message in &connection.messages {
             let msg_pos = start_pos + (end_pos - start_pos) * message.position_along_edge;
-            let scaled_radius = 3.0 * self.zoom_factor;
+            let scaled_radius = 3.0 * self.canvas.zoom_factor;
             painter.circle_filled(msg_pos, scaled_radius, egui::Color32::YELLOW);
         }
     }
@@ -1128,7 +1188,7 @@ impl FlowchartApp {
         // Apply zoom and canvas offset for proper positioning
         let world_pos = egui::pos2(node.position.0, node.position.1);
         let screen_pos = self.world_to_screen(world_pos);
-        let scaled_size = NODE_SIZE * self.zoom_factor;
+        let scaled_size = NODE_SIZE * self.canvas.zoom_factor;
         let rect = egui::Rect::from_center_size(screen_pos, scaled_size);
 
         // Determine node color based on type
@@ -1139,7 +1199,7 @@ impl FlowchartApp {
         };
 
         // Darken color if being dragged
-        if Some(node.id) == self.dragging_node {
+        if Some(node.id) == self.interaction.dragging_node {
             color = egui::Color32::from_rgba_unmultiplied(
                 (color.r() as f32 * 0.8) as u8,
                 (color.g() as f32 * 0.8) as u8,
@@ -1152,9 +1212,9 @@ impl FlowchartApp {
         painter.rect_filled(rect, 5.0, color);
 
         // Draw border with appropriate highlighting
-        let (stroke_color, stroke_width) = if Some(node.id) == self.dragging_node {
+        let (stroke_color, stroke_width) = if Some(node.id) == self.interaction.dragging_node {
             (egui::Color32::from_rgb(255, 165, 0), 4.0) // Orange for dragging
-        } else if Some(node.id) == self.selected_node {
+        } else if Some(node.id) == self.interaction.selected_node {
             (egui::Color32::YELLOW, 3.0) // Yellow for selected
         } else {
             (egui::Color32::BLACK, 2.0) // Black for normal
@@ -1169,13 +1229,13 @@ impl FlowchartApp {
     /// Renders the node's name text with proper wrapping and positioning.
     fn draw_node_text(&self, painter: &egui::Painter, node: &FlowchartNode, pos: egui::Pos2, size: egui::Vec2) {
         let text_rect = egui::Rect::from_center_size(
-            egui::pos2(pos.x, pos.y - 5.0 * self.zoom_factor),
-            egui::vec2(size.x - 10.0 * self.zoom_factor, size.y - 20.0 * self.zoom_factor) // Leave padding
+            egui::pos2(pos.x, pos.y - 5.0 * self.canvas.zoom_factor),
+            egui::vec2(size.x - 10.0 * self.canvas.zoom_factor, size.y - 20.0 * self.canvas.zoom_factor) // Leave padding
         );
 
         // Create zoom-aware font size
         let base_font_size = 12.0;
-        let scaled_font_size = (base_font_size * self.zoom_factor).clamp(8.0, 48.0);
+        let scaled_font_size = (base_font_size * self.canvas.zoom_factor).clamp(8.0, 48.0);
         let font_id = egui::FontId::proportional(scaled_font_size);
 
         let max_width = text_rect.width();
