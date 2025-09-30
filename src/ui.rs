@@ -505,9 +505,16 @@ impl FlowchartApp {
             ui.separator();
 
             // Simulation controls
-            if ui.button("Start").clicked() {
-                self.is_simulation_running = true;
-                self.flowchart.simulation_state = SimulationState::Running;
+            if self.is_simulation_running {
+                if ui.button("Pause").clicked() {
+                    self.is_simulation_running = false;
+                    self.flowchart.simulation_state = SimulationState::Paused;
+                }
+            } else {
+                if ui.button("Start").clicked() {
+                    self.is_simulation_running = true;
+                    self.flowchart.simulation_state = SimulationState::Running;
+                }
             }
             if ui.button("Stop").clicked() {
                 self.is_simulation_running = false;
@@ -516,6 +523,12 @@ impl FlowchartApp {
                 // Clear all messages from connections
                 for connection in &mut self.flowchart.connections {
                     connection.messages.clear();
+                }
+                // Reset producer counters
+                for node in self.flowchart.nodes.values_mut() {
+                    if let NodeType::Producer { messages_produced, .. } = &mut node.node_type {
+                        *messages_produced = 0;
+                    }
                 }
             }
             if ui.button("Step").clicked() {
@@ -693,6 +706,7 @@ impl FlowchartApp {
                 ref mut start_step,
                 ref mut messages_per_cycle,
                 ref mut steps_between_cycles,
+                messages_produced: _
             } = node.node_type {
                 match property {
                     "start_step" => {
@@ -742,6 +756,7 @@ impl FlowchartApp {
                 start_step,
                 messages_per_cycle,
                 steps_between_cycles,
+                messages_produced,
             } => {
                 // Initialize temp values if empty
                 if self.interaction.temp_producer_start_step.is_empty() {
@@ -764,10 +779,12 @@ impl FlowchartApp {
                     self.update_producer_property(node.id, "start_step");
                 }
 
-                ui.label("Messages per Cycle:");
+                ui.label("Total Messages:");
                 if ui.text_edit_singleline(&mut self.interaction.temp_producer_messages_per_cycle).changed() {
                     self.update_producer_property(node.id, "messages_per_cycle");
                 }
+
+                ui.label(format!("Messages Produced: {}/{}", messages_produced, messages_per_cycle));
 
                 ui.label("Steps Between Cycles:");
                 if ui.text_edit_singleline(&mut self.interaction.temp_producer_steps_between).changed() {
@@ -827,8 +844,9 @@ impl FlowchartApp {
                             self.create_node_at_pos(NodeType::Producer {
                                 message_template: serde_json::json!({"value": 0}),
                                 start_step: 0,
-                                messages_per_cycle: 1,
-                                steps_between_cycles: 0,
+                                messages_per_cycle: 10,
+                                steps_between_cycles: 1,
+                                messages_produced: 0,
                             });
                             self.context_menu.show = false;
                         }

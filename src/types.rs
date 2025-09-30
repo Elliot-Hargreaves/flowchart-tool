@@ -44,10 +44,13 @@ pub enum NodeType {
         message_template: serde_json::Value,
         /// Which step to start producing messages on (0-based)
         start_step: u64,
-        /// Number of messages to generate per production cycle
+        /// Total number of messages to generate across all cycles
         messages_per_cycle: u32,
         /// Number of steps to wait between production cycles
         steps_between_cycles: u32,
+        /// Counter tracking how many messages have been produced so far
+        #[serde(default)]
+        messages_produced: u32,
     },
     /// A node that consumes and destroys incoming messages
     Consumer { 
@@ -137,7 +140,7 @@ pub struct Message {
     pub id: MessageId,
     /// The data payload of the message
     pub data: serde_json::Value,
-    /// Animation position along the connection edge (0.0 = start, 1.0 = end)
+    /// Visual animation position (0.0 = start, 1.0 = end). Messages are delivered in one step.
     pub position_along_edge: f32,
 }
 

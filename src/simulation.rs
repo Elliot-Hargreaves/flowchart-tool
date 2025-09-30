@@ -51,20 +51,10 @@ impl SimulationEngine {
     pub fn step(&mut self, flowchart: &mut Flowchart) -> Vec<(NodeId, Message)> {
         let mut delivered_messages = Vec::new();
 
-        // Move messages along connections and collect those that have arrived
+        // Collect all messages for delivery and clear connections
         for connection in &mut flowchart.connections {
-            let mut arrived_messages = Vec::new();
-
-            for message in &mut connection.messages {
-                message.position_along_edge += 0.01; // TODO: Make speed configurable
-                if message.position_along_edge >= 1.0 {
-                    arrived_messages.push(message.clone());
-                }
-            }
-
-            // Remove delivered messages and add them to the delivery list
-            connection.messages.retain(|m| m.position_along_edge < 1.0);
-            for message in arrived_messages {
+            // All messages are delivered immediately in one step
+            for message in connection.messages.drain(..) {
                 delivered_messages.push((connection.to, message));
             }
         }
@@ -76,19 +66,20 @@ impl SimulationEngine {
 
         for node_id in node_ids {
             if let Some(node) = flowchart.nodes.get_mut(&node_id) {
-                match &node.node_type.clone() {
+                match node.node_type.clone() {
                     NodeType::Producer { 
                         message_template,
                         start_step,
                         messages_per_cycle,
                         steps_between_cycles,
+                        messages_produced: _,
                     } => {
                         let generated_messages = self.process_producer_node(
                             node,
-                            message_template,
-                            *start_step,
-                            *messages_per_cycle,
-                            *steps_between_cycles,
+                            &message_template,
+                            start_step,
+                            messages_per_cycle,
+                            steps_between_cycles,
                             current_step,
                         );
 
@@ -107,7 +98,7 @@ impl SimulationEngine {
                         self.process_consumer_node(node);
                     }
                     NodeType::Transformer { script } => {
-                        self.process_transformer_node(node, script);
+                        self.process_transformer_node(node, &script);
                     }
                 }
             }
@@ -126,7 +117,7 @@ impl SimulationEngine {
     /// * `node` - The producer node to process
     /// * `message_template` - The JSON template for messages to produce
     /// * `start_step` - Which step to start producing messages
-    /// * `messages_per_cycle` - Number of messages to generate per cycle
+    /// * `messages_per_cycle` - Total number of messages to generate (not per cycle, but in total)
     /// * `steps_between_cycles` - Number of steps to wait between production cycles
     /// * `current_step` - The current simulation step
     /// 
@@ -150,6 +141,19 @@ impl SimulationEngine {
             return generated_messages;
         }
 
+        // Get the messages_produced counter from the node
+        let messages_produced = if let NodeType::Producer { messages_produced, .. } = &node.node_type {
+            *messages_produced
+        } else {
+            0
+        };
+
+        // Check if we've already produced all messages
+        if messages_produced >= messages_per_cycle {
+            node.state = NodeState::Idle;
+            return generated_messages;
+        }
+
         let steps_since_start = current_step - start_step;
 
         // Check if this is a production cycle step
@@ -164,10 +168,18 @@ impl SimulationEngine {
         if should_produce {
             node.state = NodeState::Processing;
 
-            // Generate the specified number of messages
-            for _ in 0..messages_per_cycle {
+            // Generate one message (or however many remain until we hit the total)
+            let remaining = messages_per_cycle - messages_produced;
+            let to_generate = remaining.min(1); // Generate 1 message per cycle
+
+            for _ in 0..to_generate {
                 let message = Message::new(message_template.clone());
                 generated_messages.push(message);
+            }
+
+            // Update the counter in the node
+            if let NodeType::Producer { messages_produced: ref mut counter, .. } = &mut node.node_type {
+                *counter += to_generate;
             }
         } else {
             node.state = NodeState::Idle;
