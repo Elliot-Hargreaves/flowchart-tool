@@ -62,6 +62,15 @@ struct InteractionState {
     /// Last mouse position during panning operation
     #[serde(skip)]
     last_pan_pos: Option<egui::Pos2>,
+    /// Node from which a connection is being drawn (shift-click drag)
+    #[serde(skip)]
+    drawing_connection_from: Option<NodeId>,
+    /// Current mouse position while drawing connection
+    #[serde(skip)]
+    connection_draw_pos: Option<egui::Pos2>,
+    /// Currently selected connection index, if any
+    #[serde(skip)]
+    selected_connection: Option<usize>,
 }
 
 impl Default for InteractionState {
@@ -76,6 +85,9 @@ impl Default for InteractionState {
             node_drag_offset: egui::Vec2::ZERO,
             is_panning: false,
             last_pan_pos: None,
+            drawing_connection_from: None,
+            connection_draw_pos: None,
+            selected_connection: None,
         }
     }
 }
@@ -215,6 +227,9 @@ impl eframe::App for FlowchartApp {
         // Handle pending file operations
         self.handle_pending_operations(ctx);
 
+        // Handle delete key for removing selected objects
+        self.handle_delete_key(ctx);
+
         // Properties panel on the right side
         egui::SidePanel::right("properties_panel")
             .resizable(true)
@@ -250,6 +265,31 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    /// Handles delete key presses to remove selected nodes or connections.
+    fn handle_delete_key(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+            if let Some(selected_node) = self.interaction.selected_node {
+                // Remove the selected node
+                self.flowchart.nodes.remove(&selected_node);
+
+                // Remove all connections involving this node
+                self.flowchart.connections.retain(|c| c.from != selected_node && c.to != selected_node);
+
+                // Clear selection
+                self.interaction.selected_node = None;
+                self.interaction.editing_node_name = None;
+                self.file.has_unsaved_changes = true;
+            } else if let Some(conn_idx) = self.interaction.selected_connection {
+                // Remove the selected connection
+                if conn_idx < self.flowchart.connections.len() {
+                    self.flowchart.connections.remove(conn_idx);
+                    self.interaction.selected_connection = None;
+                    self.file.has_unsaved_changes = true;
+                }
+            }
+        }
+    }
+
     /// Handle pending file operations for WASM compatibility
     fn handle_pending_operations(&mut self, ctx: &egui::Context) {
         // First, process any completed file operations from the channel
@@ -487,9 +527,9 @@ impl FlowchartApp {
         });
     }
 
-    /// Renders the properties panel showing details of the selected node.
+    /// Renders the properties panel showing details of the selected node or connection.
     /// 
-    /// The panel displays node information and allows editing of node properties
+    /// The panel displays node/connection information and allows editing of properties
     /// including name, type-specific settings, and current state.
     fn draw_properties_panel(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
@@ -498,6 +538,9 @@ impl FlowchartApp {
 
             if let Some(selected_id) = self.interaction.selected_node {
                 if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
+                    ui.label("Type: Node");
+                    ui.separator();
+
                     // Node name editing
                     ui.label("Name:");
 
@@ -522,10 +565,41 @@ impl FlowchartApp {
                 } else {
                     ui.label("Node not found");
                 }
+            } else if let Some(conn_idx) = self.interaction.selected_connection {
+                if let Some(connection) = self.flowchart.connections.get(conn_idx) {
+                    self.draw_connection_properties(ui, connection);
+                } else {
+                    ui.label("Connection not found");
+                }
             } else {
                 self.draw_no_selection_info(ui);
             }
         });
+    }
+
+    /// Renders connection properties in the properties panel.
+    fn draw_connection_properties(&self, ui: &mut egui::Ui, connection: &Connection) {
+        ui.label("Type: Connection");
+        ui.separator();
+
+        // Show from and to node names
+        if let Some(from_node) = self.flowchart.nodes.get(&connection.from) {
+            ui.label(format!("From: {}", from_node.name));
+        } else {
+            ui.label(format!("From: (node not found)"));
+        }
+
+        if let Some(to_node) = self.flowchart.nodes.get(&connection.to) {
+            ui.label(format!("To: {}", to_node.name));
+        } else {
+            ui.label(format!("To: (node not found)"));
+        }
+
+        ui.separator();
+        ui.label(format!("Messages in transit: {}", connection.messages.len()));
+
+        ui.separator();
+        ui.colored_label(egui::Color32::GRAY, "Press Delete to remove");
     }
 
     /// Saves the flowchart to a JSON string.
@@ -980,21 +1054,66 @@ impl FlowchartApp {
         if ui.input(|i| i.pointer.primary_down()) && !self.interaction.is_panning {
             if let Some(current_pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(current_pos);
+                let shift_held = ui.input(|i| i.modifiers.shift);
 
-                if self.interaction.dragging_node.is_none() {
-                    // Start dragging if over a node
+                // Check if we're starting a new interaction
+                if self.interaction.dragging_node.is_none() && self.interaction.drawing_connection_from.is_none() {
+                    // Check if clicking on a node
                     if let Some(node_id) = self.find_node_at_position(world_pos) {
-                        self.start_node_drag(node_id, current_pos, world_pos);
+                        if shift_held {
+                            // Shift-click on node: start drawing connection
+                            self.interaction.drawing_connection_from = Some(node_id);
+                            self.interaction.connection_draw_pos = Some(current_pos);
+                        } else {
+                            // Normal click on node: start dragging
+                            self.start_node_drag(node_id, current_pos, world_pos);
+                        }
                     }
+                    // If not clicking on a node, do nothing (no drag starts)
                 } else if let Some(dragging_id) = self.interaction.dragging_node {
-                    // Continue dragging - update node position with grid snapping support
+                    // Continue dragging node - check shift for grid snapping
                     self.update_dragged_node_position(dragging_id, world_pos, ui);
+                } else if self.interaction.drawing_connection_from.is_some() {
+                    // Continue drawing connection - update preview position
+                    self.interaction.connection_draw_pos = Some(current_pos);
                 }
             }
         } else {
-            // Stop dragging when mouse released
+            // Mouse released - finalize connection if drawing
+            if self.interaction.drawing_connection_from.is_some() {
+                if let Some(current_pos) = response.interact_pointer_pos() {
+                    let world_pos = self.screen_to_world(current_pos);
+                    self.finalize_connection(world_pos);
+                }
+            }
+
+            // Stop all dragging/drawing operations when mouse released
             self.interaction.dragging_node = None;
             self.interaction.drag_start_pos = None;
+            self.interaction.drawing_connection_from = None;
+            self.interaction.connection_draw_pos = None;
+        }
+    }
+
+    /// Finalizes connection creation when mouse is released.
+    fn finalize_connection(&mut self, world_pos: egui::Pos2) {
+        if let Some(from_node) = self.interaction.drawing_connection_from {
+            if let Some(to_node) = self.find_node_at_position(world_pos) {
+                // Don't create self-connections
+                if from_node != to_node {
+                    // Check if connection already exists
+                    let connection_exists = self.flowchart.connections.iter().any(|c| {
+                        c.from == from_node && c.to == to_node
+                    });
+
+                    if !connection_exists {
+                        // Create new connection
+                        let connection = Connection::new(from_node, to_node);
+                        self.flowchart.connections.push(connection);
+                        self.file.has_unsaved_changes = true;
+                    }
+                }
+            }
         }
     }
 
@@ -1133,13 +1252,36 @@ impl FlowchartApp {
         }
 
         // Draw connections second (behind nodes)
-        for connection in &self.flowchart.connections {
-            self.draw_connection(painter, connection);
+        for (idx, connection) in self.flowchart.connections.iter().enumerate() {
+            let is_selected = self.interaction.selected_connection == Some(idx);
+            self.draw_connection(painter, connection, is_selected);
+        }
+
+        // Draw connection preview if currently drawing
+        if let Some(from_node_id) = self.interaction.drawing_connection_from {
+            if let Some(draw_pos) = self.interaction.connection_draw_pos {
+                self.draw_connection_preview(painter, from_node_id, draw_pos);
+            }
         }
 
         // Draw nodes on top
         for (_id, node) in &self.flowchart.nodes {
             self.draw_node(painter, node);
+        }
+    }
+
+    /// Renders a preview of the connection being drawn during shift-click drag.
+    fn draw_connection_preview(&self, painter: &egui::Painter, from_node_id: NodeId, to_screen_pos: egui::Pos2) {
+        if let Some(from_node) = self.flowchart.nodes.get(&from_node_id) {
+            let from_world = egui::pos2(from_node.position.0, from_node.position.1);
+            let from_screen = self.world_to_screen(from_world);
+
+            // Draw dashed line for preview
+            let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255));
+            painter.line_segment([from_screen, to_screen_pos], stroke);
+
+            // Draw small circle at the end to indicate connection point
+            painter.circle_filled(to_screen_pos, 4.0, egui::Color32::from_rgb(100, 150, 255));
         }
     }
 
@@ -1149,8 +1291,25 @@ impl FlowchartApp {
         if response.clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(pos);
-                self.interaction.selected_node = self.find_node_at_position(world_pos);
-                self.interaction.editing_node_name = None; // Stop editing on click elsewhere
+
+                // First try to select a node
+                if let Some(node_id) = self.find_node_at_position(world_pos) {
+                    self.interaction.selected_node = Some(node_id);
+                    self.interaction.selected_connection = None;
+                    self.interaction.editing_node_name = None;
+                } else {
+                    // Try to select a connection
+                    if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
+                        self.interaction.selected_connection = Some(conn_idx);
+                        self.interaction.selected_node = None;
+                        self.interaction.editing_node_name = None;
+                    } else {
+                        // Clear selection if clicking on empty space
+                        self.interaction.selected_node = None;
+                        self.interaction.selected_connection = None;
+                        self.interaction.editing_node_name = None;
+                    }
+                }
             }
         }
 
@@ -1166,8 +1325,51 @@ impl FlowchartApp {
         }
     }
 
-    /// Renders a connection between two nodes with animated messages.
-    fn draw_connection(&self, painter: &egui::Painter, connection: &Connection) {
+    /// Finds the connection at the given world position, if any.
+    /// Returns the index of the connection in the connections vector.
+    fn find_connection_at_position(&self, pos: egui::Pos2) -> Option<usize> {
+        const CLICK_THRESHOLD: f32 = 10.0; // pixels in world space
+
+        for (idx, connection) in self.flowchart.connections.iter().enumerate() {
+            if let (Some(from_node), Some(to_node)) = (
+                self.flowchart.nodes.get(&connection.from),
+                self.flowchart.nodes.get(&connection.to),
+            ) {
+                let start = egui::pos2(from_node.position.0, from_node.position.1);
+                let end = egui::pos2(to_node.position.0, to_node.position.1);
+
+                // Calculate distance from point to line segment
+                let distance = self.point_to_line_distance(pos, start, end);
+
+                if distance < CLICK_THRESHOLD {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Calculates the distance from a point to a line segment.
+    fn point_to_line_distance(&self, point: egui::Pos2, line_start: egui::Pos2, line_end: egui::Pos2) -> f32 {
+        let line_vec = line_end - line_start;
+        let point_vec = point - line_start;
+        let line_len_sq = line_vec.length_sq();
+
+        if line_len_sq < 0.0001 {
+            // Line segment is essentially a point
+            return point_vec.length();
+        }
+
+        // Project point onto line segment
+        let t = (point_vec.dot(line_vec) / line_len_sq).clamp(0.0, 1.0);
+        let projection = line_start + line_vec * t;
+
+        (point - projection).length()
+    }
+
+    /// Renders a connection between two nodes with animated messages and directional arrow.
+    fn draw_connection(&self, painter: &egui::Painter, connection: &Connection, is_selected: bool) {
         // Get node positions with zoom and canvas offset applied
         let start_world = self.flowchart.nodes.get(&connection.from)
             .map(|n| egui::pos2(n.position.0, n.position.1))
@@ -1179,11 +1381,21 @@ impl FlowchartApp {
             .unwrap_or_else(|| egui::pos2(100.0, 100.0));
         let end_pos = self.world_to_screen(end_world);
 
+        // Choose color and width based on selection
+        let (line_color, line_width) = if is_selected {
+            (egui::Color32::from_rgb(100, 150, 255), 3.0)
+        } else {
+            (egui::Color32::DARK_GRAY, 2.0)
+        };
+
         // Draw the connection line
         painter.line_segment(
             [start_pos, end_pos],
-            egui::Stroke::new(2.0, egui::Color32::DARK_GRAY)
+            egui::Stroke::new(line_width, line_color)
         );
+
+        // Draw arrow at the center of the connection
+        self.draw_arrow_at_center(painter, start_pos, end_pos, line_color);
 
         // Draw messages as animated dots along the connection
         for message in &connection.messages {
@@ -1191,6 +1403,34 @@ impl FlowchartApp {
             let scaled_radius = 3.0 * self.canvas.zoom_factor;
             painter.circle_filled(msg_pos, scaled_radius, egui::Color32::YELLOW);
         }
+    }
+
+    /// Draws a directional arrow at the center of a connection line.
+    fn draw_arrow_at_center(&self, painter: &egui::Painter, start: egui::Pos2, end: egui::Pos2, color: egui::Color32) {
+        // Calculate center point
+        let center = start + (end - start) * 0.5;
+
+        // Calculate direction vector
+        let direction = (end - start).normalized();
+
+        // Arrow size scales with zoom
+        let arrow_size = 8.0 * self.canvas.zoom_factor;
+        let arrow_width = 6.0 * self.canvas.zoom_factor;
+
+        // Calculate perpendicular vector for arrow wings
+        let perpendicular = egui::vec2(-direction.y, direction.x);
+
+        // Calculate arrow points (triangle)
+        let arrow_tip = center + direction * arrow_size;
+        let arrow_left = center - direction * arrow_size + perpendicular * arrow_width;
+        let arrow_right = center - direction * arrow_size - perpendicular * arrow_width;
+
+        // Draw filled triangle
+        painter.add(egui::Shape::convex_polygon(
+            vec![arrow_tip, arrow_left, arrow_right],
+            color,
+            egui::Stroke::NONE,
+        ));
     }
 
     /// Renders a single flowchart node with appropriate styling and text.
