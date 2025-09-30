@@ -40,8 +40,14 @@ pub enum SimulationState {
 pub enum NodeType {
     /// A node that generates messages at a specified rate
     Producer { 
-        /// Number of messages to generate per simulation step
-        generation_rate: u32 
+        /// JSON template for the message data to produce
+        message_template: serde_json::Value,
+        /// Which step to start producing messages on (0-based)
+        start_step: u64,
+        /// Number of messages to generate per production cycle
+        messages_per_cycle: u32,
+        /// Number of steps to wait between production cycles
+        steps_between_cycles: u32,
     },
     /// A node that consumes and destroys incoming messages
     Consumer { 
@@ -163,6 +169,8 @@ pub struct Flowchart {
     pub connections: Vec<Connection>,
     /// Current state of the simulation
     pub simulation_state: SimulationState,
+    /// Current simulation step counter
+    pub current_step: u64,
 }
 
 impl Default for Flowchart {
@@ -172,6 +180,7 @@ impl Default for Flowchart {
             nodes: HashMap::new(),
             connections: Vec::new(),
             simulation_state: SimulationState::Stopped,
+            current_step: 0,
         }
     }
 }

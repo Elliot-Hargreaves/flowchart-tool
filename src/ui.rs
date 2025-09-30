@@ -71,6 +71,15 @@ struct InteractionState {
     /// Currently selected connection index, if any
     #[serde(skip)]
     selected_connection: Option<usize>,
+    /// Temporary storage for producer properties while editing
+    #[serde(skip)]
+    temp_producer_start_step: String,
+    #[serde(skip)]
+    temp_producer_messages_per_cycle: String,
+    #[serde(skip)]
+    temp_producer_steps_between: String,
+    #[serde(skip)]
+    temp_producer_message_template: String,
 }
 
 impl Default for InteractionState {
@@ -88,6 +97,10 @@ impl Default for InteractionState {
             drawing_connection_from: None,
             connection_draw_pos: None,
             selected_connection: None,
+            temp_producer_start_step: String::new(),
+            temp_producer_messages_per_cycle: String::new(),
+            temp_producer_steps_between: String::new(),
+            temp_producer_message_template: String::new(),
         }
     }
 }
@@ -499,6 +512,11 @@ impl FlowchartApp {
             if ui.button("Stop").clicked() {
                 self.is_simulation_running = false;
                 self.flowchart.simulation_state = SimulationState::Stopped;
+                self.flowchart.current_step = 0;
+                // Clear all messages from connections
+                for connection in &mut self.flowchart.connections {
+                    connection.messages.clear();
+                }
             }
             if ui.button("Step").clicked() {
                 let delivered_messages = self.simulation_engine.step(&mut self.flowchart);
@@ -511,6 +529,11 @@ impl FlowchartApp {
 
             // View options
             ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
+
+            ui.separator();
+
+            // Show current simulation step
+            ui.label(format!("Step: {}", self.flowchart.current_step));
 
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -555,7 +578,7 @@ impl FlowchartApp {
 
                     ui.separator();
 
-                    // Node type display
+                    // Node type display (now mutable)
                     self.draw_node_type_info(ui, &node);
 
                     ui.separator();
@@ -662,8 +685,50 @@ impl FlowchartApp {
         self.interaction.editing_node_name = None;
     }
 
+    /// Updates a producer node property from the temporary editing values.
+    fn update_producer_property(&mut self, node_id: NodeId, property: &str) {
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            if let NodeType::Producer { 
+                ref mut message_template,
+                ref mut start_step,
+                ref mut messages_per_cycle,
+                ref mut steps_between_cycles,
+            } = node.node_type {
+                match property {
+                    "start_step" => {
+                        if let Ok(value) = self.interaction.temp_producer_start_step.parse::<u64>() {
+                            *start_step = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "messages_per_cycle" => {
+                        if let Ok(value) = self.interaction.temp_producer_messages_per_cycle.parse::<u32>() {
+                            *messages_per_cycle = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "steps_between_cycles" => {
+                        if let Ok(value) = self.interaction.temp_producer_steps_between.parse::<u32>() {
+                            *steps_between_cycles = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "message_template" => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(
+                            &self.interaction.temp_producer_message_template
+                        ) {
+                            *message_template = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Renders node type information and type-specific properties.
-    fn draw_node_type_info(&self, ui: &mut egui::Ui, node: &FlowchartNode) {
+    fn draw_node_type_info(&mut self, ui: &mut egui::Ui, node: &FlowchartNode) {
         ui.label(format!("Type: {}", match &node.node_type {
             NodeType::Producer { .. } => "Producer",
             NodeType::Consumer { .. } => "Consumer",
@@ -672,14 +737,57 @@ impl FlowchartApp {
 
         // Type-specific properties
         match &node.node_type {
-            NodeType::Producer { generation_rate } => {
-                ui.label(format!("Generation Rate: {} msg/step", generation_rate));
+            NodeType::Producer { 
+                message_template,
+                start_step,
+                messages_per_cycle,
+                steps_between_cycles,
+            } => {
+                // Initialize temp values if empty
+                if self.interaction.temp_producer_start_step.is_empty() {
+                    self.interaction.temp_producer_start_step = start_step.to_string();
+                }
+                if self.interaction.temp_producer_messages_per_cycle.is_empty() {
+                    self.interaction.temp_producer_messages_per_cycle = messages_per_cycle.to_string();
+                }
+                if self.interaction.temp_producer_steps_between.is_empty() {
+                    self.interaction.temp_producer_steps_between = steps_between_cycles.to_string();
+                }
+                if self.interaction.temp_producer_message_template.is_empty() {
+                    self.interaction.temp_producer_message_template = 
+                        serde_json::to_string_pretty(message_template)
+                            .unwrap_or_else(|_| "{}".to_string());
+                }
+
+                ui.label("Start Step:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_start_step).changed() {
+                    self.update_producer_property(node.id, "start_step");
+                }
+
+                ui.label("Messages per Cycle:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_messages_per_cycle).changed() {
+                    self.update_producer_property(node.id, "messages_per_cycle");
+                }
+
+                ui.label("Steps Between Cycles:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_steps_between).changed() {
+                    self.update_producer_property(node.id, "steps_between_cycles");
+                }
+
+                ui.separator();
+                ui.label("Message Template (JSON):");
+                if ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
+                    .desired_rows(5)
+                    .desired_width(f32::INFINITY)
+                    .code_editor()).changed() {
+                    self.update_producer_property(node.id, "message_template");
+                }
             }
             NodeType::Consumer { consumption_rate } => {
                 ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
             }
             NodeType::Transformer { script } => {
-                ui.label("Lua Script:");
+                ui.label("JavaScript Script:");
                 ui.add(egui::TextEdit::multiline(&mut script.clone())
                     .desired_rows(3)
                     .desired_width(f32::INFINITY));
@@ -716,7 +824,12 @@ impl FlowchartApp {
                         ui.separator();
 
                         if ui.button("Producer").clicked() {
-                            self.create_node_at_pos(NodeType::Producer { generation_rate: 1 });
+                            self.create_node_at_pos(NodeType::Producer {
+                                message_template: serde_json::json!({"value": 0}),
+                                start_step: 0,
+                                messages_per_cycle: 1,
+                                steps_between_cycles: 0,
+                            });
                             self.context_menu.show = false;
                         }
 
@@ -888,6 +1001,7 @@ impl FlowchartApp {
     /// Creates a new empty flowchart.
     fn new_flowchart(&mut self) {
         self.flowchart = Flowchart::new();
+        self.flowchart.current_step = 0;
         self.file.current_path = None;
         self.file.has_unsaved_changes = false;
         self.interaction.selected_node = None;
@@ -1297,17 +1411,32 @@ impl FlowchartApp {
                     self.interaction.selected_node = Some(node_id);
                     self.interaction.selected_connection = None;
                     self.interaction.editing_node_name = None;
+                    // Clear temp producer values to reload from selected node
+                    self.interaction.temp_producer_start_step.clear();
+                    self.interaction.temp_producer_messages_per_cycle.clear();
+                    self.interaction.temp_producer_steps_between.clear();
+                    self.interaction.temp_producer_message_template.clear();
                 } else {
                     // Try to select a connection
                     if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
                         self.interaction.selected_connection = Some(conn_idx);
                         self.interaction.selected_node = None;
                         self.interaction.editing_node_name = None;
+                        // Clear temp producer values
+                        self.interaction.temp_producer_start_step.clear();
+                        self.interaction.temp_producer_messages_per_cycle.clear();
+                        self.interaction.temp_producer_steps_between.clear();
+                        self.interaction.temp_producer_message_template.clear();
                     } else {
                         // Clear selection if clicking on empty space
                         self.interaction.selected_node = None;
                         self.interaction.selected_connection = None;
                         self.interaction.editing_node_name = None;
+                        // Clear temp producer values
+                        self.interaction.temp_producer_start_step.clear();
+                        self.interaction.temp_producer_messages_per_cycle.clear();
+                        self.interaction.temp_producer_steps_between.clear();
+                        self.interaction.temp_producer_message_template.clear();
                     }
                 }
             }
@@ -1397,11 +1526,55 @@ impl FlowchartApp {
         // Draw arrow at the center of the connection
         self.draw_arrow_at_center(painter, start_pos, end_pos, line_color);
 
-        // Draw messages as animated dots along the connection
-        for message in &connection.messages {
-            let msg_pos = start_pos + (end_pos - start_pos) * message.position_along_edge;
-            let scaled_radius = 3.0 * self.canvas.zoom_factor;
-            painter.circle_filled(msg_pos, scaled_radius, egui::Color32::YELLOW);
+        // Draw messages as a grid next to the arrow
+        if !connection.messages.is_empty() {
+            self.draw_message_grid(painter, start_pos, end_pos, connection.messages.len());
+        }
+    }
+
+    /// Draws a grid of dots representing messages in transit next to the connection arrow.
+    /// 
+    /// The grid is 5 dots wide with unlimited depth.
+    fn draw_message_grid(&self, painter: &egui::Painter, start: egui::Pos2, end: egui::Pos2, message_count: usize) {
+        const GRID_WIDTH: usize = 5;
+        const DOT_SPACING: f32 = 8.0;
+        const DOT_RADIUS: f32 = 3.0;
+
+        // Calculate center point of the connection
+        let center = start + (end - start) * 0.5;
+
+        // Calculate direction and perpendicular vectors
+        let direction = (end - start).normalized();
+        let perpendicular = egui::vec2(-direction.y, direction.x);
+
+        // Offset the grid to the side of the arrow
+        let grid_offset = perpendicular * 15.0 * self.canvas.zoom_factor;
+
+        // Calculate grid dimensions
+        let rows = (message_count + GRID_WIDTH - 1) / GRID_WIDTH; // Ceiling division
+
+        let cols = usize::min(GRID_WIDTH, message_count);
+
+        // Calculate starting position (top-left of grid)
+        let grid_width_pixels = (GRID_WIDTH as f32 * -1.0) as f32 * DOT_SPACING * self.canvas.zoom_factor;
+        let grid_height_pixels = (GRID_WIDTH -1) as f32 * DOT_SPACING * self.canvas.zoom_factor;
+
+        let grid_start = center + grid_offset 
+            - perpendicular * grid_width_pixels * 0.5
+            - direction * grid_height_pixels * 0.5;
+
+        // Draw each dot in the grid
+        for i in 0..message_count {
+            let row = i / GRID_WIDTH;
+            let col = i % GRID_WIDTH;
+
+            let dot_pos = grid_start 
+                + perpendicular * (row as f32 * DOT_SPACING * self.canvas.zoom_factor)
+                + direction * (col as f32 * DOT_SPACING * self.canvas.zoom_factor);
+
+            let scaled_radius = DOT_RADIUS * self.canvas.zoom_factor;
+            painter.circle_filled(dot_pos, scaled_radius, egui::Color32::YELLOW);
+            painter.circle_stroke(dot_pos, scaled_radius, egui::Stroke::new(1.0, egui::Color32::DARK_GRAY));
         }
     }
 

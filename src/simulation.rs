@@ -69,13 +69,39 @@ impl SimulationEngine {
             }
         }
 
-        // Process each node based on its type - collect node IDs first to avoid borrow conflicts
+        // Process producer nodes and generate messages
+        // Collect node IDs first to avoid borrow conflicts
         let node_ids: Vec<_> = flowchart.nodes.keys().cloned().collect();
+        let current_step = flowchart.current_step;
+
         for node_id in node_ids {
             if let Some(node) = flowchart.nodes.get_mut(&node_id) {
                 match &node.node_type.clone() {
-                    NodeType::Producer { generation_rate } => {
-                        self.process_producer_node(node, *generation_rate);
+                    NodeType::Producer { 
+                        message_template,
+                        start_step,
+                        messages_per_cycle,
+                        steps_between_cycles,
+                    } => {
+                        let generated_messages = self.process_producer_node(
+                            node,
+                            message_template,
+                            *start_step,
+                            *messages_per_cycle,
+                            *steps_between_cycles,
+                            current_step,
+                        );
+
+                        // Add generated messages to all outgoing connections
+                        if !generated_messages.is_empty() {
+                            for connection in &mut flowchart.connections {
+                                if connection.from == node_id {
+                                    for message in &generated_messages {
+                                        connection.messages.push(message.clone());
+                                    }
+                                }
+                            }
+                        }
                     }
                     NodeType::Consumer { consumption_rate: _ } => {
                         self.process_consumer_node(node);
@@ -87,6 +113,9 @@ impl SimulationEngine {
             }
         }
 
+        // Increment step counter
+        flowchart.current_step += 1;
+
         delivered_messages
     }
 
@@ -95,10 +124,56 @@ impl SimulationEngine {
     /// # Arguments
     /// 
     /// * `node` - The producer node to process
-    /// * `generation_rate` - Number of messages to generate per step
-    fn process_producer_node(&self, node: &mut FlowchartNode, _generation_rate: u32) {
-        // TODO: Implement message generation based on rate
-        node.state = NodeState::Processing;
+    /// * `message_template` - The JSON template for messages to produce
+    /// * `start_step` - Which step to start producing messages
+    /// * `messages_per_cycle` - Number of messages to generate per cycle
+    /// * `steps_between_cycles` - Number of steps to wait between production cycles
+    /// * `current_step` - The current simulation step
+    /// 
+    /// # Returns
+    /// 
+    /// A vector of messages that were generated during this step
+    fn process_producer_node(
+        &self,
+        node: &mut FlowchartNode,
+        message_template: &serde_json::Value,
+        start_step: u64,
+        messages_per_cycle: u32,
+        steps_between_cycles: u32,
+        current_step: u64,
+    ) -> Vec<Message> {
+        let mut generated_messages = Vec::new();
+
+        // Check if we should produce messages on this step
+        if current_step < start_step {
+            node.state = NodeState::Idle;
+            return generated_messages;
+        }
+
+        let steps_since_start = current_step - start_step;
+
+        // Check if this is a production cycle step
+        let should_produce = if steps_between_cycles == 0 {
+            // Produce every step after start_step
+            true
+        } else {
+            // Produce on start_step, then every steps_between_cycles steps
+            steps_since_start % (steps_between_cycles as u64) == 0
+        };
+
+        if should_produce {
+            node.state = NodeState::Processing;
+
+            // Generate the specified number of messages
+            for _ in 0..messages_per_cycle {
+                let message = Message::new(message_template.clone());
+                generated_messages.push(message);
+            }
+        } else {
+            node.state = NodeState::Idle;
+        }
+
+        generated_messages
     }
 
     /// Processes a consumer node by updating its state.
