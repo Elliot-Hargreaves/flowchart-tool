@@ -1429,12 +1429,42 @@ impl FlowchartApp {
             let from_world = egui::pos2(from_node.position.0, from_node.position.1);
             let from_screen = self.world_to_screen(from_world);
 
-            // Draw dashed line for preview
-            let stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255));
+            // Check if hovering over a valid target node
+            let to_world_pos = self.screen_to_world(to_screen_pos);
+            let is_valid = if let Some(to_node_id) = self.find_node_at_position(to_world_pos) {
+                if to_node_id == from_node_id {
+                    // Self-connection is invalid
+                    false
+                } else if let Some(to_node) = self.flowchart.nodes.get(&to_node_id) {
+                    // Check if connection is allowed based on node types
+                    match (&from_node.node_type, &to_node.node_type) {
+                        // Consumer cannot send (cannot be source)
+                        (NodeType::Consumer { .. }, _) => false,
+                        // Producer cannot receive (cannot be target)
+                        (_, NodeType::Producer { .. }) => false,
+                        // All other combinations are valid
+                        _ => true,
+                    }
+                } else {
+                    true // Unknown node, assume valid
+                }
+            } else {
+                true // No target node, show as potentially valid
+            };
+
+            // Choose color based on validity
+            let color = if is_valid {
+                egui::Color32::from_rgb(100, 150, 255) // Blue for valid
+            } else {
+                egui::Color32::from_rgb(255, 80, 80) // Red for invalid
+            };
+
+            // Draw line for preview
+            let stroke = egui::Stroke::new(2.0, color);
             painter.line_segment([from_screen, to_screen_pos], stroke);
 
             // Draw small circle at the end to indicate connection point
-            painter.circle_filled(to_screen_pos, 4.0, egui::Color32::from_rgb(100, 150, 255));
+            painter.circle_filled(to_screen_pos, 4.0, color);
         }
     }
 
