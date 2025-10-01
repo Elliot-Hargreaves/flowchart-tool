@@ -109,7 +109,6 @@ mod tests {
     #[test]
     fn test_message_creation() {
         let message = Message::new(serde_json::json!({"test": "data"}));
-        assert_eq!(message.position_along_edge, 0.0);
         assert_eq!(message.data["test"], "data");
     }
 }

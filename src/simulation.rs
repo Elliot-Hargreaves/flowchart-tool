@@ -309,7 +309,6 @@ pub fn execute_transformer_script(script: &str, input_message: &Message) -> Resu
     let transformed_message = Message {
         id: uuid::Uuid::new_v4(),
         data: result,
-        position_along_edge: 0.0,
     };
 
     Ok(vec![transformed_message])
@@ -354,7 +353,6 @@ mod tests {
         let transformed_message = &result[0];
 
         // Verify the transformed data contains our expected values
-        assert_eq!(transformed_message.position_along_edge, 0.0);
         assert_eq!(transformed_message.data.get("transformed"), Some(&json!(true)));
         assert_eq!(transformed_message.data.get("value"), Some(&json!(42)));
     }

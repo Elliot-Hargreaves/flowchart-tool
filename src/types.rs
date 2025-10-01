@@ -140,8 +140,6 @@ pub struct Message {
     pub id: MessageId,
     /// The data payload of the message
     pub data: serde_json::Value,
-    /// Visual animation position (0.0 = start, 1.0 = end). Messages are delivered in one step.
-    pub position_along_edge: f32,
 }
 
 impl Message {
@@ -158,7 +156,6 @@ impl Message {
         Self {
             id: Uuid::new_v4(),
             data,
-            position_along_edge: 0.0,
         }
     }
 }
