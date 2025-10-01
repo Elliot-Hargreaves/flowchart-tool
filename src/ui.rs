@@ -10,6 +10,167 @@ use eframe::epaint::StrokeKind;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Sender, Receiver};
 
+/// Simple JavaScript syntax highlighter
+mod js_highlighter {
+    use eframe::egui::{self, Color32};
+    use eframe::epaint::text::{LayoutJob, TextFormat};
+
+    pub fn highlight(text: &str, font_id: egui::FontId) -> LayoutJob {
+        let mut job = LayoutJob::default();
+
+        // Define colors for different token types
+        let keyword_color = Color32::from_rgb(86, 156, 214);     // Blue
+        let string_color = Color32::from_rgb(206, 145, 120);      // Orange
+        let comment_color = Color32::from_rgb(106, 153, 85);      // Green
+        let number_color = Color32::from_rgb(181, 206, 168);      // Light green
+        let function_color = Color32::from_rgb(220, 220, 170);    // Yellow
+        let default_color = Color32::from_rgb(212, 212, 212);     // Light gray
+
+        let keywords = [
+            "function", "return", "if", "else", "for", "while", "do", "switch", "case",
+            "break", "continue", "var", "let", "const", "new", "this", "typeof",
+            "null", "undefined", "true", "false", "in", "of", "try", "catch",
+            "finally", "throw", "class", "extends", "super", "static", "async",
+            "await", "yield", "import", "export", "default", "from", "as",
+        ];
+
+        let mut chars = text.char_indices().peekable();
+
+        while let Some((i, c)) = chars.next() {
+            // Check for comments
+            if c == '/' {
+                if let Some(&(_, next_c)) = chars.peek() {
+                    if next_c == '/' {
+                        // Single-line comment
+                        let start = i;
+                        chars.next(); // consume second '/'
+                        while let Some(&(_, ch)) = chars.peek() {
+                            if ch == '\n' {
+                                break;
+                            }
+                            chars.next();
+                        }
+                        let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                        job.append(
+                            &text[start..end],
+                            0.0,
+                            TextFormat::simple(font_id.clone(), comment_color),
+                        );
+                        continue;
+                    } else if next_c == '*' {
+                        // Multi-line comment
+                        let start = i;
+                        chars.next(); // consume '*'
+                        let mut found_end = false;
+                        while let Some((_, ch)) = chars.next() {
+                            if ch == '*' {
+                                if let Some(&(_, '/')) = chars.peek() {
+                                    chars.next(); // consume '/'
+                                    found_end = true;
+                                    break;
+                                }
+                            }
+                        }
+                        let end = if found_end {
+                            chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len())
+                        } else {
+                            text.len()
+                        };
+                        job.append(
+                            &text[start..end],
+                            0.0,
+                            TextFormat::simple(font_id.clone(), comment_color),
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            // Check for strings
+            if c == '"' || c == '\'' || c == '`' {
+                let quote = c;
+                let start = i;
+                let mut escaped = false;
+
+                while let Some((_, ch)) = chars.next() {
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if ch == '\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if ch == quote {
+                        break;
+                    }
+                }
+
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                job.append(
+                    &text[start..end],
+                    0.0,
+                    TextFormat::simple(font_id.clone(), string_color),
+                );
+                continue;
+            }
+
+            // Check for numbers
+            if c.is_ascii_digit() {
+                let start = i;
+                while let Some(&(_, ch)) = chars.peek() {
+                    if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                job.append(
+                    &text[start..end],
+                    0.0,
+                    TextFormat::simple(font_id.clone(), number_color),
+                );
+                continue;
+            }
+
+            // Check for identifiers (keywords or function names)
+            if c.is_alphabetic() || c == '_' || c == '$' {
+                let start = i;
+                while let Some(&(_, ch)) = chars.peek() {
+                    if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                let word = &text[start..end];
+
+                let color = if keywords.contains(&word) {
+                    keyword_color
+                } else if chars.peek().map(|&(_, ch)| ch == '(').unwrap_or(false) {
+                    function_color
+                } else {
+                    default_color
+                };
+
+                job.append(word, 0.0, TextFormat::simple(font_id.clone(), color));
+                continue;
+            }
+
+            // Default: just add the character
+            job.append(
+                &text[i..i + c.len_utf8()],
+                0.0,
+                TextFormat::simple(font_id.clone(), default_color),
+            );
+        }
+
+        job
+    }
+}
+
 /// State related to canvas navigation and display
 #[derive(Serialize, Deserialize)]
 struct CanvasState {
@@ -80,6 +241,9 @@ struct InteractionState {
     temp_producer_steps_between: String,
     #[serde(skip)]
     temp_producer_message_template: String,
+    /// Temporary storage for transformer script while editing
+    #[serde(skip)]
+    temp_transformer_script: String,
 }
 
 impl Default for InteractionState {
@@ -101,6 +265,7 @@ impl Default for InteractionState {
             temp_producer_messages_per_cycle: String::new(),
             temp_producer_steps_between: String::new(),
             temp_producer_message_template: String::new(),
+            temp_transformer_script: String::new(),
         }
     }
 }
@@ -194,6 +359,12 @@ pub struct FlowchartApp {
     context_menu: ContextMenuState,
     /// File operations state
     file: FileState,
+    /// Node that encountered a script error, if any
+    #[serde(skip)]
+    error_node: Option<NodeId>,
+    /// Frame counter for animation effects
+    #[serde(skip)]
+    frame_counter: u64,
 }
 
 #[derive(Debug)]
@@ -227,6 +398,8 @@ impl Default for FlowchartApp {
             interaction: InteractionState::default(),
             context_menu: ContextMenuState::default(),
             file: FileState::default(),
+            error_node: None,
+            frame_counter: 0,
         }
     }
 }
@@ -269,10 +442,24 @@ impl eframe::App for FlowchartApp {
 
             // Handle delivered messages
             for (node_id, message) in delivered_messages {
-                self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart);
+                match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
+                    Ok(_) => {},
+                    Err(error_msg) => {
+                        // Stop simulation on error
+                        self.is_simulation_running = false;
+                        self.flowchart.simulation_state = SimulationState::Stopped;
+                        self.error_node = Some(node_id);
+                        eprintln!("Simulation stopped due to error in node {}: {}", node_id, error_msg);
+                    }
+                }
             }
 
+            self.frame_counter += 1;
             ctx.request_repaint(); // Keep animating
+        } else if self.error_node.is_some() {
+            // Keep repainting to show flashing error border
+            self.frame_counter += 1;
+            ctx.request_repaint();
         }
     }
 }
@@ -520,6 +707,7 @@ impl FlowchartApp {
                 self.is_simulation_running = false;
                 self.flowchart.simulation_state = SimulationState::Stopped;
                 self.flowchart.current_step = 0;
+                self.error_node = None;
                 // Clear all messages from connections
                 for connection in &mut self.flowchart.connections {
                     connection.messages.clear();
@@ -534,7 +722,13 @@ impl FlowchartApp {
             if ui.button("Step").clicked() {
                 let delivered_messages = self.simulation_engine.step(&mut self.flowchart);
                 for (node_id, message) in delivered_messages {
-                    self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart);
+                    match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
+                        Ok(_) => {},
+                        Err(error_msg) => {
+                            self.error_node = Some(node_id);
+                            eprintln!("Error in node {}: {}", node_id, error_msg);
+                        }
+                    }
                 }
             }
 
@@ -741,6 +935,21 @@ impl FlowchartApp {
         }
     }
 
+    /// Updates a transformer node property from the temporary editing values.
+    fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            if let NodeType::Transformer { ref mut script } = node.node_type {
+                match property {
+                    "script" => {
+                        *script = self.interaction.temp_transformer_script.clone();
+                        self.file.has_unsaved_changes = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Renders node type information and type-specific properties.
     fn draw_node_type_info(&mut self, ui: &mut egui::Ui, node: &FlowchartNode) {
         ui.label(format!("Type: {}", match &node.node_type {
@@ -804,10 +1013,28 @@ impl FlowchartApp {
                 ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
             }
             NodeType::Transformer { script } => {
+                // Initialize temp value if empty
+                if self.interaction.temp_transformer_script.is_empty() {
+                    self.interaction.temp_transformer_script = script.clone();
+                }
+
                 ui.label("JavaScript Script:");
-                ui.add(egui::TextEdit::multiline(&mut script.clone())
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY));
+
+                // Create a custom layouter for JavaScript syntax highlighting
+                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layout_job = js_highlighter::highlight(text.as_str(), font_id);
+                    layout_job.wrap.max_width = wrap_width;
+                    ui.fonts(|f| f.layout_job(layout_job))
+                };
+
+                if ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
+                    .desired_rows(10)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .layouter(&mut layouter)).changed() {
+                    self.update_transformer_property(node.id, "script");
+                }
             }
         }
     }
@@ -1485,6 +1712,7 @@ impl FlowchartApp {
                     self.interaction.temp_producer_messages_per_cycle.clear();
                     self.interaction.temp_producer_steps_between.clear();
                     self.interaction.temp_producer_message_template.clear();
+                    self.interaction.temp_transformer_script.clear();
                 } else {
                     // Try to select a connection
                     if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
@@ -1496,6 +1724,7 @@ impl FlowchartApp {
                         self.interaction.temp_producer_messages_per_cycle.clear();
                         self.interaction.temp_producer_steps_between.clear();
                         self.interaction.temp_producer_message_template.clear();
+                        self.interaction.temp_transformer_script.clear();
                     } else {
                         // Clear selection if clicking on empty space
                         self.interaction.selected_node = None;
@@ -1506,6 +1735,7 @@ impl FlowchartApp {
                         self.interaction.temp_producer_messages_per_cycle.clear();
                         self.interaction.temp_producer_steps_between.clear();
                         self.interaction.temp_producer_message_template.clear();
+                        self.interaction.temp_transformer_script.clear();
                     }
                 }
             }
@@ -1620,9 +1850,9 @@ impl FlowchartApp {
         let grid_offset = perpendicular * 15.0 * self.canvas.zoom_factor;
 
         // Calculate grid dimensions
-        let rows = (message_count + GRID_WIDTH - 1) / GRID_WIDTH; // Ceiling division
+        let _rows = (message_count + GRID_WIDTH - 1) / GRID_WIDTH; // Ceiling division
 
-        let cols = usize::min(GRID_WIDTH, message_count);
+        let _cols = usize::min(GRID_WIDTH, message_count);
 
         // Calculate starting position (top-left of grid)
         let grid_width_pixels = (GRID_WIDTH as f32 * -1.0) as f32 * DOT_SPACING * self.canvas.zoom_factor;
@@ -1706,7 +1936,15 @@ impl FlowchartApp {
         painter.rect_filled(rect, 5.0, color);
 
         // Draw border with appropriate highlighting
-        let (stroke_color, stroke_width) = if Some(node.id) == self.interaction.dragging_node {
+        let (stroke_color, stroke_width) = if Some(node.id) == self.error_node {
+            // Flashing red border for error nodes (flash every 15 frames)
+            let flash_on = (self.frame_counter / 15) % 2 == 0;
+            if flash_on {
+                (egui::Color32::from_rgb(255, 0, 0), 5.0) // Bright red for error
+            } else {
+                (egui::Color32::from_rgb(180, 0, 0), 5.0) // Dark red for error
+            }
+        } else if Some(node.id) == self.interaction.dragging_node {
             (egui::Color32::from_rgb(255, 165, 0), 4.0) // Orange for dragging
         } else if Some(node.id) == self.interaction.selected_node {
             (egui::Color32::YELLOW, 3.0) // Yellow for selected

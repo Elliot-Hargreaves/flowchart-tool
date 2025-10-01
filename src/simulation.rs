@@ -213,7 +213,7 @@ impl SimulationEngine {
     /// 
     /// This method handles message delivery based on the node type:
     /// - Consumers destroy the message
-    /// - Transformers may modify and forward the message
+    /// - Transformers execute JavaScript and forward the result
     /// - Producers ignore incoming messages
     /// 
     /// # Arguments
@@ -221,21 +221,44 @@ impl SimulationEngine {
     /// * `node_id` - The ID of the destination node
     /// * `message` - The message to deliver
     /// * `flowchart` - The flowchart containing the destination node
-    pub fn deliver_message(&mut self, node_id: NodeId, _message: Message, flowchart: &mut Flowchart) {
+    /// 
+    /// # Returns
+    /// 
+    /// Returns `Ok(())` if the message was delivered successfully, or an error message if JavaScript execution failed.
+    pub fn deliver_message(&mut self, node_id: NodeId, message: Message, flowchart: &mut Flowchart) -> Result<(), String> {
         if let Some(node) = flowchart.nodes.get_mut(&node_id) {
             match &node.node_type {
                 NodeType::Consumer { .. } => {
                     // Message is consumed and destroyed
                     node.state = NodeState::Processing;
+                    Ok(())
                 }
-                NodeType::Transformer { .. } => {
-                    // Message may be transformed and forwarded
+                NodeType::Transformer { script } => {
+                    // Execute JavaScript to transform the message
                     node.state = NodeState::Processing;
+                    let script = script.clone();
+
+                    // Execute the transformation script
+                    let transformed_messages = execute_transformer_script(&script, &message)?;
+
+                    // Send transformed messages to all outgoing connections
+                    for transformed_message in transformed_messages {
+                        for connection in flowchart.connections.iter_mut() {
+                            if connection.from == node_id {
+                                connection.messages.push(transformed_message.clone());
+                            }
+                        }
+                    }
+
+                    Ok(())
                 }
                 NodeType::Producer { .. } => {
                     // Producers don't accept incoming messages
+                    Ok(())
                 }
             }
+        } else {
+            Err(format!("Node {} not found", node_id))
         }
     }
 }
