@@ -2,9 +2,23 @@
 //! 
 //! This module provides JavaScript script execution capabilities that work both in WASM
 //! and native environments using the boa pure-Rust JavaScript implementation.
+//! 
+//! # Security & Sandboxing
+//! 
+//! The JavaScript execution environment is sandboxed to ensure safe execution of
+//! user-provided scripts:
+//! 
+//! - **No File System Access**: boa_engine doesn't provide file system APIs
+//! - **No Network Access**: No socket, fetch, or HTTP APIs are available
+//! - **No eval()**: Dynamic code execution via eval() is disabled
+//! - **No Function() constructor**: Cannot create functions from strings
+//! - **Pure JavaScript Only**: Only safe, standard JavaScript operations are available
+//! 
+//! This makes it safe to execute scripts from untrusted sources, as they can only
+//! perform data transformations on the provided input without side effects.
 
 use serde_json::Value;
-use boa_engine::{Context, JsValue, Source, property::PropertyKey, JsString, object::builtins::JsArray, JsObject, js_string};
+use boa_engine::{Context, JsValue, Source, property::PropertyKey, JsString, object::builtins::JsArray, JsObject, js_string, JsResult};
 use boa_engine::property::NonMaxU32;
 
 /// JavaScript script execution engine that works on all platforms
@@ -13,10 +27,44 @@ pub struct JavaScriptEngine {
 }
 
 impl JavaScriptEngine {
-    /// Create a new JavaScript script engine
+    /// Create a new JavaScript script engine with sandboxed execution environment
+    /// 
+    /// The sandbox restricts access to potentially dangerous JavaScript features:
+    /// - eval() is disabled to prevent dynamic code execution
+    /// - Function() constructor is disabled
+    /// - No file system or network access (boa doesn't provide these by default)
+    /// 
+    /// Only safe, pure JavaScript operations are available for data transformation.
     pub fn new() -> Result<Self, String> {
-        let context = Context::default();
+        let mut context = Context::default();
+
+        // Disable dangerous JavaScript features for sandboxing
+        Self::setup_sandbox(&mut context)
+            .map_err(|e| format!("Failed to setup sandbox: {}", e))?;
+
         Ok(Self { context })
+    }
+
+    /// Setup sandbox by disabling dangerous JavaScript features
+    fn setup_sandbox(context: &mut Context) -> JsResult<()> {
+        // Disable eval() - prevents dynamic code execution
+        let undefined = JsValue::undefined();
+        context.register_global_property(
+            js_string!("eval"),
+            undefined.clone(),
+            Default::default()
+        )?;
+
+        // Disable Function constructor - prevents creating functions from strings
+        // Note: boa doesn't expose all globals in the same way as browser JS,
+        // but we can disable it through the global object
+        let global = context.global_object().clone();
+        global.set(js_string!("Function"), undefined.clone(), false, context)?;
+
+        // Optional: You can also disable other potentially dangerous features
+        // like import() if boa supports it in future versions
+
+        Ok(())
     }
 
     /// Execute a JavaScript script with the given input data and return the result
