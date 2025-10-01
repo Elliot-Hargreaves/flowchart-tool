@@ -295,17 +295,17 @@ pub fn execute_transformer_script(script: &str, input_message: &Message) -> Resu
         .map_err(|e| format!("Failed to create script engine: {}", e))?;
 
     // Create input JSON for the script
-    let input_json = serde_json::json!({
-        "id": input_message.id.to_string(),
-        "data": input_message.data,
-        "position_along_edge": input_message.position_along_edge
-    });
+    let input_json = serde_json::json!(input_message.data);
 
-    // Execute the script
-    let result = script_engine.execute(script, input_json)
-        .map_err(|e| format!("Script execution failed: {}", e))?;
+    // Execute the script to define the transform function
+    script_engine.execute_script(script)
+        .map_err(|e| format!("Failed to execute script: {}", e))?;
 
-    // For now, create a new message with the transformed data
+    // Call the transform function with the input
+    let result = script_engine.call_function("transform", input_json)
+        .map_err(|e| format!("Failed to call transform function: {}", e))?;
+
+    // Create a new message with the transformed data
     let transformed_message = Message {
         id: uuid::Uuid::new_v4(),
         data: result,
@@ -342,7 +342,9 @@ mod tests {
     fn test_message_script_execution() {
         let script = r#"
             // Simple transformation script
-            ({transformed: true, value: 42})
+            function transform(input) {
+                return {transformed: true, value: 42};
+            }
         "#;
 
         let input = Message::new(json!({"original": "data"}));
@@ -351,8 +353,270 @@ mod tests {
         assert_eq!(result.len(), 1);
         let transformed_message = &result[0];
 
-        // Basic test - the exact content will depend on script engine implementation
+        // Verify the transformed data contains our expected values
         assert_eq!(transformed_message.position_along_edge, 0.0);
-        // The actual transformation testing will be enhanced once script engine is fully implemented
+        assert_eq!(transformed_message.data.get("transformed"), Some(&json!(true)));
+        assert_eq!(transformed_message.data.get("value"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn test_transformer_returns_object() {
+        // Test that returning a JavaScript object properly converts to JSON
+        let script = r#"
+            function transform(input) {
+                return {
+                    status: "processed",
+                    count: 123,
+                    nested: {
+                        field: "value"
+                    }
+                };
+            }
+        "#;
+
+        let input = Message::new(json!({"input": "test"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        // Verify object structure is preserved
+        assert_eq!(msg.data.get("status"), Some(&json!("processed")));
+        assert_eq!(msg.data.get("count"), Some(&json!(123)));
+
+        // Verify nested object
+        let nested = msg.data.get("nested").expect("nested object should exist");
+        assert_eq!(nested.get("field"), Some(&json!("value")));
+    }
+
+    #[test]
+    fn test_transformer_accesses_input() {
+        // Test that the script can access the input message data
+        let script = r#"
+            function transform(input) {
+                return {
+                    original: input.data.value,
+                    doubled: input.data.value * 2
+                };
+            }
+        "#;
+
+        let input = Message::new(json!({"value": 21}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        assert_eq!(msg.data.get("original"), Some(&json!(21)));
+        assert_eq!(msg.data.get("doubled"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn test_transformer_returns_array() {
+        // Test that returning an array works correctly
+        let script = r#"
+            function transform(input) {
+                return [1, 2, 3];
+            }
+        "#;
+
+        let input = Message::new(json!({}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        // Should have an array in the data field
+        assert!(msg.data.is_array());
+        assert_eq!(msg.data.as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_transformer_returns_string() {
+        // Test that returning a string works correctly
+        let script = r#"
+            function transform(input) {
+                return "hello world";
+            }
+        "#;
+
+        let input = Message::new(json!({}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        assert_eq!(msg.data, json!("hello world"));
+    }
+
+    #[test]
+    fn test_transformer_returns_number() {
+        // Test that returning a number works correctly
+        let script = r#"
+            function transform(input) {
+                return 42;
+            }
+        "#;
+
+        let input = Message::new(json!({}));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        assert_eq!(msg.data, json!(42));
+    }
+
+    #[test]
+    fn test_transformer_complex_transformation() {
+        // Test a more complex transformation
+        let script = r#"
+            function transform(input) {
+                const data = input.data;
+                const result = {
+                    timestamp: Date.now(),
+                    items: data.items.map(x => x * 2),
+                    metadata: {
+                        processed: true,
+                        originalCount: data.items.length
+                    }
+                };
+                return result;
+            }
+        "#;
+
+        let input = Message::new(json!({
+            "items": [1, 2, 3, 4, 5]
+        }));
+        let result = execute_transformer_script(script, &input).unwrap();
+
+        assert_eq!(result.len(), 1);
+        let msg = &result[0];
+
+        // Verify transformed array
+        let items = msg.data.get("items").expect("items should exist");
+        assert_eq!(items.as_array().unwrap().len(), 5);
+        assert_eq!(items.get(0), Some(&json!(2)));
+        assert_eq!(items.get(1), Some(&json!(4)));
+
+        // Verify metadata
+        let metadata = msg.data.get("metadata").expect("metadata should exist");
+        assert_eq!(metadata.get("processed"), Some(&json!(true)));
+        assert_eq!(metadata.get("originalCount"), Some(&json!(5)));
+    }
+
+    #[test]
+    fn test_transformer_error_handling() {
+        // Test that script errors are properly caught
+        let script = r#"
+            function transform(input) {
+                throw new Error("Test error");
+            }
+        "#;
+
+        let input = Message::new(json!({}));
+        let result = execute_transformer_script(script, &input);
+
+        assert!(result.is_err());
+        let error_result = result.unwrap_err();
+        assert!(error_result.contains("Function call failed") ||
+            error_result.contains("Test error"));
+    }
+
+    #[test]
+    fn test_transformer_missing_function() {
+        // Test that a missing transform function is caught
+        let script = r#"
+            // Script doesn't define transform function
+            const x = 42;
+        "#;
+
+        let input = Message::new(json!({}));
+        let result = execute_transformer_script(script, &input);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a function"));
+    }
+
+    #[test]
+    fn test_transformer_node_delivery() {
+        // Test the complete flow of delivering a message to a transformer node
+        let mut engine = SimulationEngine::new();
+        let mut flowchart = Flowchart::new();
+
+        // Create a transformer node
+        let transformer = FlowchartNode::new(
+            "Transformer".to_string(),
+            (0.0, 0.0),
+            NodeType::Transformer {
+                script: r#"
+                    function transform(input) {
+                        return {
+                            value: input.data.x + 10,
+                            processed: true
+                        };
+                    }
+                "#.to_string()
+            }
+        );
+        let transformer_id = transformer.id;
+        flowchart.add_node(transformer);
+
+        // Create a consumer node to receive the output
+        let consumer = FlowchartNode::new(
+            "Consumer".to_string(),
+            (100.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 }
+        );
+        let consumer_id = consumer.id;
+        flowchart.add_node(consumer);
+
+        // Connect transformer to consumer
+        flowchart.add_connection(transformer_id, consumer_id).unwrap();
+
+        // Deliver a message to the transformer
+        let input_message = Message::new(json!({"x": 5}));
+        let result = engine.deliver_message(transformer_id, input_message, &mut flowchart);
+
+        assert!(result.is_ok());
+
+        // Check that the transformer created a message on the outgoing connection
+        let connection = flowchart.connections.iter()
+            .find(|c| c.from == transformer_id)
+            .expect("Connection should exist");
+
+        assert_eq!(connection.messages.len(), 1);
+        let output_message = &connection.messages[0];
+
+        // Verify the transformation happened correctly
+        assert_eq!(output_message.data.get("value"), Some(&json!(15)));
+        assert_eq!(output_message.data.get("processed"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn test_transformer_node_empty_result() {
+        // Test that returning null/undefined doesn't crash
+        let mut engine = SimulationEngine::new();
+        let mut flowchart = Flowchart::new();
+
+        let transformer = FlowchartNode::new(
+            "Transformer".to_string(),
+            (0.0, 0.0),
+            NodeType::Transformer {
+                script: r#"
+                    function transform(input) {
+                        return null;
+                    }
+                "#.to_string()
+            }
+        );
+        let transformer_id = transformer.id;
+        flowchart.add_node(transformer);
+
+        let input_message = Message::new(json!({"test": "data"}));
+        let result = engine.deliver_message(transformer_id, input_message, &mut flowchart);
+
+        // Should succeed, producing a message with null data
+        assert!(result.is_ok());
     }
 }

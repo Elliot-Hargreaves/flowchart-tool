@@ -67,6 +67,17 @@ impl JavaScriptEngine {
         Ok(())
     }
 
+    /// Execute a JavaScript script without expecting a return value
+    /// 
+    /// This is useful for defining functions and setting up the environment.
+    pub fn execute_script(&mut self, script: &str) -> Result<(), String> {
+        let source = Source::from_bytes(script);
+        self.context
+            .eval(source)
+            .map_err(|e| format!("JavaScript execution error: {}", e))?;
+        Ok(())
+    }
+
     /// Execute a JavaScript script with the given input data and return the result
     /// 
     /// The script receives the input as a global 'input' variable and should return a result.
@@ -91,6 +102,34 @@ impl JavaScriptEngine {
         // Convert the result back to serde_json::Value
         self.js_value_to_json(&js_result)
             .map_err(|e| format!("Failed to convert result to JSON: {}", e))
+    }
+
+    /// Call a JavaScript function by name with the given argument
+    /// 
+    /// The function must be defined in the global scope.
+    pub fn call_function(&mut self, function_name: &str, arg: Value) -> Result<Value, String> {
+        // Get the function from the global object
+        let global = self.context.global_object().clone();
+        let function_key = PropertyKey::String(JsString::from(function_name));
+        let function_value = global.get(function_key, &mut self.context)
+            .map_err(|e| format!("Failed to get function '{}': {}", function_name, e))?;
+
+        // Check if it's a callable function
+        if !function_value.is_callable() {
+            return Err(format!("'{}' is not a function", function_name));
+        }
+
+        // Convert the argument to JsValue
+        let js_arg = self.json_to_js_value(&arg)?;
+
+        // Call the function
+        let result = function_value.as_callable()
+            .ok_or_else(|| format!("'{}' is not callable", function_name))?
+            .call(&JsValue::undefined(), &[js_arg], &mut self.context)
+            .map_err(|e| format!("Function call failed: {}", e))?;
+
+        // Convert the result back to JSON
+        self.js_value_to_json(&result)
     }
 
     /// Convert serde_json::Value to boa JsValue
@@ -171,9 +210,31 @@ impl JavaScriptEngine {
                     }
                     Ok(Value::Array(array))
                 } else {
-                    // For regular objects, we'll return a simplified version
-                    // A full implementation would need to enumerate all properties
-                    let map = serde_json::Map::new();
+                    // Enumerate all properties of the object
+                    let mut map = serde_json::Map::new();
+
+                    // Get all enumerable own property keys
+                    let keys = obj.own_property_keys(&mut self.context)
+                        .map_err(|e| format!("Failed to get object keys: {}", e))?;
+
+                    for key in keys {
+                        // Convert key to string
+                        let key_str = match &key {
+                            PropertyKey::String(s) => s.to_std_string()
+                                .map_err(|_| "Failed to convert key to string")?,
+                            PropertyKey::Index(idx) => idx.get().to_string(),
+                            PropertyKey::Symbol(_) => continue, // Skip symbols
+                        };
+
+                        // Get the value for this key
+                        let value = obj.get(key, &mut self.context)
+                            .map_err(|e| format!("Failed to get property value: {}", e))?;
+
+                        // Convert and add to map
+                        let json_value = self.js_value_to_json(&value)?;
+                        map.insert(key_str, json_value);
+                    }
+
                     Ok(Value::Object(map))
                 }
             },
