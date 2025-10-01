@@ -194,7 +194,6 @@ mod json_highlighter {
             if c == '"' {
                 let start = i;
                 let mut escaped = false;
-                let mut ended = false;
 
                 while let Some((_, ch)) = chars.next() {
                     if escaped {
@@ -206,7 +205,6 @@ mod json_highlighter {
                         continue;
                     }
                     if ch == '"' {
-                        ended = true;
                         break;
                     }
                 }
@@ -842,8 +840,11 @@ impl FlowchartApp {
                 for connection in &mut self.flowchart.connections {
                     connection.messages.clear();
                 }
-                // Reset producer counters
+                // Reset producer counters and node states
                 for node in self.flowchart.nodes.values_mut() {
+                    // Reset all node states to Idle
+                    node.state = NodeState::Idle;
+
                     if let NodeType::Producer { messages_produced, .. } = &mut node.node_type {
                         *messages_produced = 0;
                     }
