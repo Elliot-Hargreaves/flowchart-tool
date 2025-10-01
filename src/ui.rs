@@ -171,6 +171,136 @@ mod js_highlighter {
     }
 }
 
+/// Simple JSON syntax highlighter
+mod json_highlighter {
+    use eframe::egui::{self, Color32};
+    use eframe::epaint::text::{LayoutJob, TextFormat};
+
+    pub fn highlight(text: &str, font_id: egui::FontId) -> LayoutJob {
+        let mut job = LayoutJob::default();
+
+        // Define colors for different token types
+        let string_color = Color32::from_rgb(206, 145, 120);      // Orange
+        let number_color = Color32::from_rgb(181, 206, 168);      // Light green
+        let keyword_color = Color32::from_rgb(86, 156, 214);      // Blue (for true/false/null)
+        let key_color = Color32::from_rgb(156, 220, 254);         // Light blue (for object keys)
+        let default_color = Color32::from_rgb(212, 212, 212);     // Light gray
+
+        let mut chars = text.char_indices().peekable();
+        let mut in_key_position = false; // Track if we're expecting an object key
+
+        while let Some((i, c)) = chars.next() {
+            // Check for strings
+            if c == '"' {
+                let start = i;
+                let mut escaped = false;
+                let mut ended = false;
+
+                while let Some((_, ch)) = chars.next() {
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if ch == '\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if ch == '"' {
+                        ended = true;
+                        break;
+                    }
+                }
+
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                let string_text = &text[start..end];
+
+                // Check if this is an object key (followed by ':')
+                let mut peek_chars = text[end..].chars();
+                let is_key = loop {
+                    match peek_chars.next() {
+                        Some(ch) if ch.is_whitespace() => continue,
+                        Some(':') => break true,
+                        _ => break false,
+                    }
+                };
+
+                let color = if is_key || in_key_position {
+                    in_key_position = false;
+                    key_color
+                } else {
+                    string_color
+                };
+
+                job.append(
+                    string_text,
+                    0.0,
+                    TextFormat::simple(font_id.clone(), color),
+                );
+                continue;
+            }
+
+            // Check for numbers (including negative)
+            if c.is_ascii_digit() || (c == '-' && chars.peek().map(|&(_, ch)| ch.is_ascii_digit()).unwrap_or(false)) {
+                let start = i;
+                if c == '-' {
+                    chars.next(); // consume the digit after '-'
+                }
+                while let Some(&(_, ch)) = chars.peek() {
+                    if ch.is_ascii_digit() || ch == '.' || ch == 'e' || ch == 'E' || ch == '+' || ch == '-' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                job.append(
+                    &text[start..end],
+                    0.0,
+                    TextFormat::simple(font_id.clone(), number_color),
+                );
+                continue;
+            }
+
+            // Check for keywords (true, false, null)
+            if c.is_alphabetic() {
+                let start = i;
+                while let Some(&(_, ch)) = chars.peek() {
+                    if ch.is_alphanumeric() {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let end = chars.peek().map(|&(idx, _)| idx).unwrap_or(text.len());
+                let word = &text[start..end];
+
+                let color = if word == "true" || word == "false" || word == "null" {
+                    keyword_color
+                } else {
+                    default_color
+                };
+
+                job.append(word, 0.0, TextFormat::simple(font_id.clone(), color));
+                continue;
+            }
+
+            // Track structural characters
+            if c == '{' || c == ',' {
+                in_key_position = true;
+            }
+
+            // Default: just add the character
+            job.append(
+                &text[i..i + c.len_utf8()],
+                0.0,
+                TextFormat::simple(font_id.clone(), default_color),
+            );
+        }
+
+        job
+    }
+}
+
 /// State related to canvas navigation and display
 #[derive(Serialize, Deserialize)]
 struct CanvasState {
@@ -828,6 +958,36 @@ impl FlowchartApp {
         ui.separator();
         ui.label(format!("Messages in transit: {}", connection.messages.len()));
 
+        // Show message contents
+        if !connection.messages.is_empty() {
+            ui.separator();
+            ui.label("Message Contents:");
+
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for (idx, message) in connection.messages.iter().enumerate() {
+                        ui.push_id(idx, |ui| {
+                            egui::CollapsingHeader::new(format!("Message {}", idx + 1))
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    // Display message as formatted JSON
+                                    let json_str = serde_json::to_string_pretty(&message.data)
+                                        .unwrap_or_else(|_| format!("{:?}", message.data));
+
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut json_str.as_str())
+                                            .desired_rows(5)
+                                            .desired_width(f32::INFINITY)
+                                            .code_editor()
+                                            .interactive(false)
+                                    );
+                                });
+                        });
+                    }
+                });
+        }
+
         ui.separator();
         ui.colored_label(egui::Color32::GRAY, "Press Delete to remove");
     }
@@ -1002,10 +1162,20 @@ impl FlowchartApp {
 
                 ui.separator();
                 ui.label("Message Template (JSON):");
+
+                // Create a custom layouter for JSON syntax highlighting
+                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+                    let mut layout_job = json_highlighter::highlight(text.as_str(), font_id);
+                    layout_job.wrap.max_width = wrap_width;
+                    ui.fonts(|f| f.layout_job(layout_job))
+                };
+
                 if ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
                     .desired_rows(5)
                     .desired_width(f32::INFINITY)
-                    .code_editor()).changed() {
+                    .font(egui::TextStyle::Monospace)
+                    .layouter(&mut layouter)).changed() {
                     self.update_producer_property(node.id, "message_template");
                 }
             }
@@ -1071,7 +1241,7 @@ impl FlowchartApp {
                             self.create_node_at_pos(NodeType::Producer {
                                 message_template: serde_json::json!({"value": 0}),
                                 start_step: 0,
-                                messages_per_cycle: 10,
+                                messages_per_cycle: 1,
                                 steps_between_cycles: 1,
                                 messages_produced: 0,
                             });
