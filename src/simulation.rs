@@ -393,8 +393,8 @@ mod tests {
         let script = r#"
             function transform(input) {
                 return {
-                    original: input.data.value,
-                    doubled: input.data.value * 2
+                    original: input.value,
+                    doubled: input.value * 2
                 };
             }
         "#;
@@ -470,13 +470,12 @@ mod tests {
         // Test a more complex transformation
         let script = r#"
             function transform(input) {
-                const data = input.data;
                 const result = {
                     timestamp: Date.now(),
-                    items: data.items.map(x => x * 2),
+                    items: input.items.map(x => x * 2),
                     metadata: {
                         processed: true,
-                        originalCount: data.items.length
+                        originalCount: input.items.length
                     }
                 };
                 return result;
@@ -550,7 +549,7 @@ mod tests {
                 script: r#"
                     function transform(input) {
                         return {
-                            value: input.data.x + 10,
+                            value: input.x + 10,
                             processed: true
                         };
                     }
