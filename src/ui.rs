@@ -593,6 +593,151 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    /// Triggers a file download in the browser (WASM only, Firefox-compatible)
+    #[cfg(target_arch = "wasm32")]
+    fn trigger_download(filename: &str, content: &str) -> Result<(), String> {
+        use crate::wasm_bindgen::JsCast;
+
+        let window = web_sys::window().ok_or("No window found")?;
+        let document = window.document().ok_or("No document found")?;
+
+        // Create a Blob containing the file content
+        let blob_parts = js_sys::Array::new();
+        blob_parts.push(&crate::wasm_bindgen::JsValue::from_str(content));
+
+        let mut blob_options = web_sys::BlobPropertyBag::new();
+        blob_options.type_("application/json");
+
+        let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_options)
+            .map_err(|_| "Failed to create blob")?;
+
+        // Create object URL for the blob
+        let url = web_sys::Url::create_object_url_with_blob(&blob)
+            .map_err(|_| "Failed to create object URL")?;
+
+        // Create a temporary anchor element and trigger download
+        let anchor = document
+            .create_element("a")
+            .map_err(|_| "Failed to create anchor element")?
+            .dyn_into::<web_sys::HtmlAnchorElement>()
+            .map_err(|_| "Failed to cast to anchor element")?;
+
+        anchor.set_href(&url);
+        anchor.set_download(filename);
+        anchor.style().set_property("display", "none").ok();
+
+        document.body()
+            .ok_or("No body found")?
+            .append_child(&anchor)
+            .map_err(|_| "Failed to append anchor")?;
+
+        anchor.click();
+
+        document.body()
+            .ok_or("No body found")?
+            .remove_child(&anchor)
+            .map_err(|_| "Failed to remove anchor")?;
+
+        // Clean up the object URL
+        web_sys::Url::revoke_object_url(&url)
+            .map_err(|_| "Failed to revoke object URL")?;
+
+        Ok(())
+    }
+
+    /// Opens a file picker dialog in the browser (WASM only, Firefox-compatible)
+    #[cfg(target_arch = "wasm32")]
+    async fn show_open_file_picker() -> Option<web_sys::File> {
+        use crate::wasm_bindgen::JsCast;
+        use crate::wasm_bindgen::closure::Closure;
+
+        let window = web_sys::window()?;
+        let document = window.document()?;
+
+        // Create a file input element
+        let input = document
+            .create_element("input")
+            .ok()?
+            .dyn_into::<web_sys::HtmlInputElement>()
+            .ok()?;
+
+        input.set_type("file");
+        input.set_accept(".json,application/json");
+        input.style().set_property("display", "none").ok()?;
+
+        // Create a promise to wait for file selection
+        let (sender, receiver) = futures::channel::oneshot::channel::<Option<web_sys::File>>();
+        let sender = std::rc::Rc::new(std::cell::RefCell::new(Some(sender)));
+
+        let onchange = Closure::wrap(Box::new(move |event: web_sys::Event| {
+            let input = event.target()
+                .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
+
+            if let Some(input) = input {
+                let file = input.files()
+                    .and_then(|files| files.get(0));
+
+                if let Some(sender) = sender.borrow_mut().take() {
+                    let _ = sender.send(file);
+                }
+            }
+        }) as Box<dyn FnMut(_)>);
+
+        input.set_onchange(Some(onchange.as_ref().unchecked_ref()));
+        onchange.forget();
+
+        // Append to body and trigger click
+        document.body()?.append_child(&input).ok()?;
+        input.click();
+
+        // Wait for file selection
+        let file = receiver.await.ok()??;
+
+        // Clean up
+        document.body()?.remove_child(&input).ok()?;
+
+        Some(file)
+    }
+
+    /// Reads content from a File object (WASM only)
+    #[cfg(target_arch = "wasm32")]
+    async fn read_file(file: web_sys::File) -> Result<String, String> {
+        use crate::wasm_bindgen::JsCast;
+        use crate::wasm_bindgen::JsValue;
+
+        let file_reader = web_sys::FileReader::new()
+            .map_err(|_| "Failed to create FileReader".to_string())?;
+
+        let promise = js_sys::Promise::new(&mut |resolve, reject| {
+            let reader = file_reader.clone();
+
+            let onload = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
+                if let Ok(result) = reader.result() {
+                    let _ = resolve.call1(&JsValue::NULL, &result);
+                }
+            }) as Box<dyn FnMut(_)>);
+
+            file_reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+            onload.forget();
+
+            let onerror = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
+                let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("Failed to read file"));
+            }) as Box<dyn FnMut(_)>);
+
+            file_reader.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+            onerror.forget();
+        });
+
+        file_reader.read_as_text(&file)
+            .map_err(|_| "Failed to start reading file".to_string())?;
+
+        let result = wasm_bindgen_futures::JsFuture::from(promise).await
+            .map_err(|e| format!("Failed to read file: {:?}", e))?;
+
+        result.as_string()
+            .ok_or_else(|| "File content is not a string".to_string())
+    }
+
     /// Handles delete key presses to remove selected nodes or connections.
     fn handle_delete_key(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
@@ -661,33 +806,32 @@ impl FlowchartApp {
 
             match save_op {
                 PendingSaveOperation::SaveAs => {
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Some(handle) = rfd::AsyncFileDialog::new()
-                            .add_filter("JSON", &["json"])
-                            .set_file_name("flowchart.json")
-                            .save_file()
-                            .await
-                        {
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                match handle.write(flowchart_json.as_bytes()).await {
-                                    Ok(_) => {
-                                        let filename = handle.file_name();
-                                        if let Some(tx) = sender {
-                                            let _ = tx.send(FileOperationResult::SaveCompleted(filename));
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if let Some(tx) = sender {
-                                            let _ = tx.send(FileOperationResult::OperationFailed(
-                                                format!("Failed to write file: {}", e)
-                                            ));
-                                        }
-                                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        // Use synchronous download for Firefox compatibility
+                        match Self::trigger_download("flowchart.json", &flowchart_json) {
+                            Ok(_) => {
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::SaveCompleted("flowchart.json".to_string()));
                                 }
                             }
+                            Err(e) => {
+                                if let Some(tx) = sender {
+                                    let _ = tx.send(FileOperationResult::OperationFailed(e));
+                                }
+                            }
+                        }
+                        ctx.request_repaint();
+                    }
 
-                            #[cfg(not(target_arch = "wasm32"))]
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        tokio::spawn(async move {
+                            if let Some(handle) = rfd::AsyncFileDialog::new()
+                                .add_filter("JSON", &["json"])
+                                .set_file_name("flowchart.json")
+                                .save_file()
+                                .await
                             {
                                 let path = handle.path();
                                 match std::fs::write(path, flowchart_json) {
@@ -707,16 +851,15 @@ impl FlowchartApp {
                                     }
                                 }
                             }
-                        }
-                        ctx.request_repaint();
-                    });
+                            ctx.request_repaint();
+                        });
+                    }
                 }
                 PendingSaveOperation::Save => {
-                    if let Some(ref path) = self.file.current_path.clone() {
-                        let path = path.clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
+                    if let Some(path) = self.file.current_path.clone() {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            tokio::spawn(async move {
                                 match std::fs::write(&path, flowchart_json) {
                                     Ok(_) => {
                                         if let Some(tx) = sender {
@@ -731,9 +874,16 @@ impl FlowchartApp {
                                         }
                                     }
                                 }
-                            }
-                            ctx.request_repaint();
-                        });
+                                ctx.request_repaint();
+                            });
+                        }
+
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            // For WASM, we can't "save" to a previous path without user interaction
+                            // Fall back to Save As
+                            self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
+                        }
                     } else {
                         self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
                     }
@@ -746,33 +896,40 @@ impl FlowchartApp {
             let ctx = ctx.clone();
             let sender = self.file.file_operation_sender.clone();
 
-            wasm_bindgen_futures::spawn_local(async move {
-                if let Some(handle) = rfd::AsyncFileDialog::new()
-                    .add_filter("JSON", &["json"])
-                    .pick_file()
-                    .await
-                {
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let content = handle.read().await;
-                        match String::from_utf8(content) {
-                            Ok(json_str) => {
-                                let filename = handle.file_name();
-                                if let Some(tx) = sender {
-                                    let _ = tx.send(FileOperationResult::LoadCompleted(filename, json_str));
+            #[cfg(target_arch = "wasm32")]
+            {
+                wasm_bindgen_futures::spawn_local(async move {
+                    match Self::show_open_file_picker().await {
+                        Some(file) => {
+                            let filename = file.name();
+                            match Self::read_file(file).await {
+                                Ok(content) => {
+                                    if let Some(tx) = sender {
+                                        let _ = tx.send(FileOperationResult::LoadCompleted(filename, content));
+                                    }
                                 }
-                            }
-                            Err(e) => {
-                                if let Some(tx) = sender {
-                                    let _ = tx.send(FileOperationResult::OperationFailed(
-                                        format!("Failed to read file as UTF-8: {}", e)
-                                    ));
+                                Err(e) => {
+                                    if let Some(tx) = sender {
+                                        let _ = tx.send(FileOperationResult::OperationFailed(e));
+                                    }
                                 }
                             }
                         }
+                        None => {
+                            eprintln!("Open dialog cancelled or API not supported");
+                        }
                     }
+                    ctx.request_repaint();
+                });
+            }
 
-                    #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                tokio::spawn(async move {
+                    if let Some(handle) = rfd::AsyncFileDialog::new()
+                        .add_filter("JSON", &["json"])
+                        .pick_file()
+                        .await
                     {
                         let path = handle.path();
                         match std::fs::read_to_string(path) {
@@ -793,9 +950,9 @@ impl FlowchartApp {
                             }
                         }
                     }
-                }
-                ctx.request_repaint();
-            });
+                    ctx.request_repaint();
+                });
+            }
         }
     }
     /// Renders the toolbar with file operations, simulation controls, and view options.
@@ -1300,25 +1457,7 @@ impl FlowchartApp {
 
     /// Opens a file dialog to save the flowchart with a new name.
     fn save_as_flowchart(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let file_dialog_future = async {
-                if let Some(path) = rfd::AsyncFileDialog::new()
-                    .add_filter("JSON", &["json"])
-                    .set_file_name("flowchart.json")
-                    .save_file().await
-                {
-                    let filename = path.path().display().to_string();
-                    self.save_to_path(&filename);
-                }
-            };
-            futures::executor::block_on(file_dialog_future);
-        }
+        self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
     }
 
     /// Saves the flowchart to the specified path.
@@ -1349,60 +1488,13 @@ impl FlowchartApp {
 
     /// Opens a file dialog to load a flowchart.
     fn load_flowchart(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.file.pending_load_operation = Some(PendingLoadOperation::Load);
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let file_dialog_future = async {
-                if let Some(path) = rfd::AsyncFileDialog::new()
-                    .add_filter("JSON", &["json"])
-                    .pick_file().await
-                {
-                    let filename = path.path().display().to_string();
-                    match std::fs::read_to_string(&filename) {
-                        Ok(json) => {
-                            match Flowchart::from_json(&json) {
-                                Ok(flowchart) => {
-                                    self.flowchart = flowchart;
-                                    self.file.current_path = Some(filename);
-                                    self.file.has_unsaved_changes = false;
-                                    self.interaction.selected_node = None;
-                                    self.interaction.editing_node_name = None;
-                                    // Update node counter to avoid ID conflicts
-                                    self.node_counter = self.flowchart.nodes.len() as u32;
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to parse flowchart: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read file: {}", e);
-                        }
-                    }
-                }
-            };
-            futures::executor::block_on(file_dialog_future);
-        }
+        self.file.pending_load_operation = Some(PendingLoadOperation::Load);
     }
 
     /// Saves the current flowchart to a file.
     fn save_flowchart(&mut self) {
         if self.file.current_path.is_some() {
-            #[cfg(target_arch = "wasm32")]
-            {
-                self.file.pending_save_operation = Some(PendingSaveOperation::Save);
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if let Some(file_path) = &self.file.current_path.clone() {
-                    self.save_to_path(file_path);
-                }
-            }
+            self.file.pending_save_operation = Some(PendingSaveOperation::Save);
         } else {
             self.save_as_flowchart();
         }

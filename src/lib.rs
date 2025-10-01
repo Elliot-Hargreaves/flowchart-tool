@@ -44,7 +44,7 @@ use {
 /// 
 /// # Example
 /// 
-/// ```no_run
+/// ```no_run,ignore-wasm32
 /// use flowchart_tool::run_app;
 /// 
 /// fn main() -> Result<(), eframe::Error> {
