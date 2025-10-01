@@ -162,7 +162,7 @@ impl SimulationEngine {
             true
         } else {
             // Produce on start_step, then every steps_between_cycles steps
-            steps_since_start % (steps_between_cycles as u64) == 0
+            steps_since_start.is_multiple_of(steps_between_cycles as u64)
         };
 
         if should_produce {

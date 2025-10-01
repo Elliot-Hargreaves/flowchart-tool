@@ -92,7 +92,7 @@ mod js_highlighter {
                 let start = i;
                 let mut escaped = false;
 
-                while let Some((_, ch)) = chars.next() {
+                for (_, ch) in chars.by_ref() {
                     if escaped {
                         escaped = false;
                         continue;
@@ -195,7 +195,7 @@ mod json_highlighter {
                 let start = i;
                 let mut escaped = false;
 
-                while let Some((_, ch)) = chars.next() {
+                for (_, ch) in chars.by_ref() {
                     if escaped {
                         escaped = false;
                         continue;
@@ -825,11 +825,9 @@ impl FlowchartApp {
                     self.is_simulation_running = false;
                     self.flowchart.simulation_state = SimulationState::Paused;
                 }
-            } else {
-                if ui.button("Start").clicked() {
-                    self.is_simulation_running = true;
-                    self.flowchart.simulation_state = SimulationState::Running;
-                }
+            } else if ui.button("Start").clicked() {
+                self.is_simulation_running = true;
+                self.flowchart.simulation_state = SimulationState::Running;
             }
             if ui.button("Stop").clicked() {
                 self.is_simulation_running = false;
@@ -947,13 +945,13 @@ impl FlowchartApp {
         if let Some(from_node) = self.flowchart.nodes.get(&connection.from) {
             ui.label(format!("From: {}", from_node.name));
         } else {
-            ui.label(format!("From: (node not found)"));
+            ui.label("From: (node not found)".to_string());
         }
 
         if let Some(to_node) = self.flowchart.nodes.get(&connection.to) {
             ui.label(format!("To: {}", to_node.name));
         } else {
-            ui.label(format!("To: (node not found)"));
+            ui.label("To: (node not found)".to_string());
         }
 
         ui.separator();
@@ -1100,12 +1098,9 @@ impl FlowchartApp {
     fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             if let NodeType::Transformer { ref mut script } = node.node_type {
-                match property {
-                    "script" => {
-                        *script = self.interaction.temp_transformer_script.clone();
-                        self.file.has_unsaved_changes = true;
-                    }
-                    _ => {}
+                if property == "script" {
+                    *script = self.interaction.temp_transformer_script.clone();
+                    self.file.has_unsaved_changes = true;
                 }
             }
         }
@@ -1270,15 +1265,14 @@ impl FlowchartApp {
             });
 
         // Handle click-outside-to-close after the first frame
-        if !self.context_menu.just_opened {
-            if ui.input(|i| i.pointer.primary_clicked()) {
+        if !self.context_menu.just_opened
+            && ui.input(|i| i.pointer.primary_clicked()) {
                 if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
                     if !area_response.response.rect.contains(click_pos) {
                         self.context_menu.show = false;
                     }
                 }
             }
-        }
 
         self.context_menu.just_opened = false;
     }
@@ -1313,7 +1307,7 @@ impl FlowchartApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut file_dialog_future = async {
+            let file_dialog_future = async {
                 if let Some(path) = rfd::AsyncFileDialog::new()
                     .add_filter("JSON", &["json"])
                     .set_file_name("flowchart.json")
@@ -1333,7 +1327,7 @@ impl FlowchartApp {
         {
             match self.flowchart.to_json() {
                 Ok(json) => {
-                    if let Err(e) = std::fs::write(&path, json) {
+                    if let Err(e) = std::fs::write(path, json) {
                         eprintln!("Failed to save file: {}", e);
                     } else {
                         self.file.current_path = Some(path.to_string());
@@ -1466,14 +1460,12 @@ impl FlowchartApp {
 
             if text_width <= max_width {
                 current_line = test_line;
+            } else if !current_line.is_empty() {
+                lines.push(current_line);
+                current_line = word.to_string();
             } else {
-                if !current_line.is_empty() {
-                    lines.push(current_line);
-                    current_line = word.to_string();
-                } else {
-                    // Single word too long, add it anyway
-                    lines.push(word.to_string());
-                }
+                // Single word too long, add it anyway
+                lines.push(word.to_string());
             }
         }
 
@@ -1816,7 +1808,7 @@ impl FlowchartApp {
         }
 
         // Draw nodes on top
-        for (_id, node) in &self.flowchart.nodes {
+        for node in self.flowchart.nodes.values() {
             self.draw_node(painter, node);
         }
     }
@@ -2021,12 +2013,12 @@ impl FlowchartApp {
         let grid_offset = perpendicular * 15.0 * self.canvas.zoom_factor;
 
         // Calculate grid dimensions
-        let _rows = (message_count + GRID_WIDTH - 1) / GRID_WIDTH; // Ceiling division
+        let _rows = message_count.div_ceil(GRID_WIDTH); // Ceiling division
 
         let _cols = usize::min(GRID_WIDTH, message_count);
 
         // Calculate starting position (top-left of grid)
-        let grid_width_pixels = (GRID_WIDTH as f32 * -1.0) as f32 * DOT_SPACING * self.canvas.zoom_factor;
+        let grid_width_pixels = -(GRID_WIDTH as f32) * DOT_SPACING * self.canvas.zoom_factor;
         let grid_height_pixels = (GRID_WIDTH -1) as f32 * DOT_SPACING * self.canvas.zoom_factor;
 
         let grid_start = center + grid_offset 
@@ -2109,7 +2101,7 @@ impl FlowchartApp {
         // Draw border with appropriate highlighting
         let (stroke_color, stroke_width) = if Some(node.id) == self.error_node {
             // Flashing red border for error nodes (flash every 15 frames)
-            let flash_on = (self.frame_counter / 15) % 2 == 0;
+            let flash_on = (self.frame_counter / 15).is_multiple_of(2);
             if flash_on {
                 (egui::Color32::from_rgb(255, 0, 0), 5.0) // Bright red for error
             } else {

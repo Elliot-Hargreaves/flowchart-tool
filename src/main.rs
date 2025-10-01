@@ -1,4 +1,3 @@
-use flowchart_tool;
 
 fn main() -> Result<(), eframe::Error> {
     // Set up logging for development
