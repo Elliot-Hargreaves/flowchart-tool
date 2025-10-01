@@ -1251,7 +1251,7 @@ impl FlowchartApp {
 
                         if ui.button("Transformer").clicked() {
                             self.create_node_at_pos(NodeType::Transformer {
-                                script: "// Transform the input message\nfunction transform(input) {\n    return { data: input.data };\n}".to_string()
+                                script: "// Transform the input message\nfunction transform(input) {\n    //Just forward it on.\n    return input;\n}".to_string()
                             });
                             self.context_menu.show = false;
                         }
