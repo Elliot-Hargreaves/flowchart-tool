@@ -1256,7 +1256,8 @@ impl FlowchartApp {
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             if let NodeType::Transformer { ref mut script } = node.node_type {
                 if property == "script" {
-                    *script = self.interaction.temp_transformer_script.clone();
+                    // replace any tabs with spaces to keep whitespace consistent
+                    *script = self.interaction.temp_transformer_script.replace("\t", "    ");
                     self.file.has_unsaved_changes = true;
                 }
             }
@@ -1324,11 +1325,25 @@ impl FlowchartApp {
                     ui.fonts(|f| f.layout_job(layout_job))
                 };
 
-                if ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
+                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
                     .desired_rows(5)
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace)
-                    .layouter(&mut layouter)).changed() {
+                    .lock_focus(true)
+                    .layouter(&mut layouter));
+
+                // Handle Tab key to insert 4 spaces
+                if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+                    // Get cursor position from text edit state
+                    let cursor_pos = ui.memory(|mem| {
+                        mem.data.get_temp::<egui::text_edit::TextEditState>(text_edit_response.id)
+                            .and_then(|state| state.cursor.char_range())
+                            .map(|range| range.primary.index)
+                    }).unwrap_or(self.interaction.temp_producer_message_template.len());
+
+                    self.interaction.temp_producer_message_template.insert_str(cursor_pos, "    ");
+                    self.update_producer_property(node.id, "message_template");
+                } else if text_edit_response.changed() {
                     self.update_producer_property(node.id, "message_template");
                 }
             }
@@ -1351,11 +1366,14 @@ impl FlowchartApp {
                     ui.fonts(|f| f.layout_job(layout_job))
                 };
 
-                if ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
+                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
                     .desired_rows(10)
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Monospace)
-                    .layouter(&mut layouter)).changed() {
+                    .lock_focus(true)
+                    .layouter(&mut layouter));
+
+                if text_edit_response.changed() {
                     self.update_transformer_property(node.id, "script");
                 }
             }
