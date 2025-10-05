@@ -96,7 +96,10 @@ impl FlowchartApp {
     ///
     /// * `ctx` - The egui context for checking input
     fn handle_delete_key(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+        // Check if any text edit widget wants keyboard focus - if so, don't handle delete
+        let is_editing_text = ctx.wants_keyboard_input();
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !is_editing_text {
             if let Some(selected_node) = self.interaction.selected_node {
                 // Remove the selected node
                 self.flowchart.nodes.remove(&selected_node);

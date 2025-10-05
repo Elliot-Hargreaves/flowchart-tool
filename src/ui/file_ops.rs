@@ -222,14 +222,14 @@ impl FlowchartApp {
     /// `Ok(())` if successful, or an error message if the operation fails.
     #[cfg(target_arch = "wasm32")]
     fn trigger_download(filename: &str, content: &str) -> Result<(), String> {
-        use wasm_bindgen::JsCast;
+        use crate::wasm_bindgen::JsCast;
 
         let window = web_sys::window().ok_or("No window found")?;
         let document = window.document().ok_or("No document found")?;
 
         // Create a Blob containing the file content
         let blob_parts = js_sys::Array::new();
-        blob_parts.push(&wasm_bindgen::JsValue::from_str(content));
+        blob_parts.push(&crate::wasm_bindgen::JsValue::from_str(content));
 
         let mut blob_options = web_sys::BlobPropertyBag::new();
         blob_options.type_("application/json");
@@ -280,8 +280,8 @@ impl FlowchartApp {
     /// The selected `File` object, or `None` if the user cancelled or the operation failed.
     #[cfg(target_arch = "wasm32")]
     async fn show_open_file_picker() -> Option<web_sys::File> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::closure::Closure;
+        use crate::wasm_bindgen::JsCast;
+        use crate::wasm_bindgen::closure::Closure;
 
         let window = web_sys::window()?;
         let document = window.document()?;
@@ -344,8 +344,8 @@ impl FlowchartApp {
     /// The file content as a string, or an error message if reading fails.
     #[cfg(target_arch = "wasm32")]
     async fn read_file(file: web_sys::File) -> Result<String, String> {
-        use wasm_bindgen::JsCast;
-        use wasm_bindgen::JsValue;
+        use crate::wasm_bindgen::JsCast;
+        use crate::wasm_bindgen::JsValue;
 
         let file_reader = web_sys::FileReader::new()
             .map_err(|_| "Failed to create FileReader".to_string())?;
@@ -353,7 +353,7 @@ impl FlowchartApp {
         let promise = js_sys::Promise::new(&mut |resolve, reject| {
             let reader = file_reader.clone();
 
-            let onload = wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
+            let onload = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
                 if let Ok(result) = reader.result() {
                     let _ = resolve.call1(&JsValue::NULL, &result);
                 }
@@ -362,7 +362,7 @@ impl FlowchartApp {
             file_reader.set_onload(Some(onload.as_ref().unchecked_ref()));
             onload.forget();
 
-            let onerror = wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
+            let onerror = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
                 let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("Failed to read file"));
             }) as Box<dyn FnMut(_)>);
 
