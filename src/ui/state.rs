@@ -52,6 +52,9 @@ pub struct InteractionState {
     /// Flag indicating text should be selected in the name field
     #[serde(skip)]
     pub should_select_text: bool,
+    /// Flag to track if focus was already requested for the current edit session
+    #[serde(skip)]
+    pub focus_requested_for_edit: bool,
     /// Node currently being dragged by the user
     #[serde(skip)]
     pub dragging_node: Option<NodeId>,
@@ -100,6 +103,7 @@ impl Default for InteractionState {
             editing_node_name: None,
             temp_node_name: String::new(),
             should_select_text: false,
+            focus_requested_for_edit: false,
             dragging_node: None,
             drag_start_pos: None,
             drag_original_position: None,

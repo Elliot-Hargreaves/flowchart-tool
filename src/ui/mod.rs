@@ -397,8 +397,11 @@ impl FlowchartApp {
     fn draw_name_editor(&mut self, ui: &mut egui::Ui, selected_id: NodeId) {
         let response = ui.text_edit_singleline(&mut self.interaction.temp_node_name);
 
-        // Auto-focus the text field
-        response.request_focus();
+        // Only request focus on the first frame of editing
+        if !self.interaction.focus_requested_for_edit {
+            response.request_focus();
+            self.interaction.focus_requested_for_edit = true;
+        }
 
         // Select all text when flag is set and field has focus
         if self.interaction.should_select_text && response.has_focus() {
@@ -409,7 +412,10 @@ impl FlowchartApp {
         // Handle Enter key to save changes
         if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.save_node_name_change(selected_id);
-        } else if response.lost_focus() {
+        }
+
+        // Check if focus was lost (but not due to Enter key which we handle above)
+        if response.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             // Save changes when focus is lost
             self.save_node_name_change(selected_id);
         }
@@ -442,6 +448,7 @@ impl FlowchartApp {
         self.interaction.editing_node_name = Some(node_id);
         self.interaction.temp_node_name = current_name.to_string();
         self.interaction.should_select_text = true;
+        self.interaction.focus_requested_for_edit = false;
     }
 
     /// Saves the current name edit to the selected node.
