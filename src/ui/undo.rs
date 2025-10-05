@@ -36,14 +36,9 @@ pub enum UndoAction {
         index: usize,
     },
     /// A node was created
-    NodeCreated {
-        node_id: NodeId,
-    },
+    NodeCreated { node_id: NodeId },
     /// A connection was created
-    ConnectionCreated {
-        from: NodeId,
-        to: NodeId,
-    },
+    ConnectionCreated { from: NodeId, to: NodeId },
     /// A node's name was changed
     NodeRenamed {
         node_id: NodeId,
@@ -127,15 +122,6 @@ impl UndoHistory {
         }
     }
 
-    /// Pushes an action onto the redo stack.
-    ///
-    /// # Arguments
-    ///
-    /// * `action` - The action that was undone
-    pub fn push_redo(&mut self, action: UndoAction) {
-        self.redo_stack.push(action);
-    }
-
     /// Clears all undo and redo history.
     pub fn clear(&mut self) {
         self.undo_stack.clear();
@@ -146,8 +132,8 @@ impl UndoHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
     use crate::types::NodeType;
+    use uuid::Uuid;
 
     #[test]
     fn test_undo_history_new() {
@@ -271,7 +257,12 @@ mod tests {
         });
 
         let action = history.pop_undo().unwrap();
-        if let UndoAction::NodeMoved { node_id: id, old_position, new_position } = action {
+        if let UndoAction::NodeMoved {
+            node_id: id,
+            old_position,
+            new_position,
+        } = action
+        {
             assert_eq!(id, node_id);
             assert_eq!(old_position, old_pos);
             assert_eq!(new_position, new_pos);
@@ -304,13 +295,17 @@ mod tests {
         let to_id = Uuid::new_v4();
         let connection = Connection::new(from_id, to_id);
 
-        history.push_action(UndoAction::ConnectionDeleted { 
-            connection: connection.clone(), 
-            index: 0 
+        history.push_action(UndoAction::ConnectionDeleted {
+            connection: connection.clone(),
+            index: 0,
         });
 
         let action = history.pop_undo().unwrap();
-        if let UndoAction::ConnectionDeleted { connection: c, index } = action {
+        if let UndoAction::ConnectionDeleted {
+            connection: c,
+            index,
+        } = action
+        {
             assert_eq!(c.from, from_id);
             assert_eq!(c.to, to_id);
             assert_eq!(index, 0);
@@ -325,7 +320,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test Node".to_string(),
             (100.0, 200.0),
-            NodeType::Consumer { consumption_rate: 5 },
+            NodeType::Consumer {
+                consumption_rate: 5,
+            },
         );
         let node_id = node.id;
 
@@ -429,7 +426,11 @@ pub trait UndoableFlowchart {
 impl UndoableFlowchart for Flowchart {
     fn apply_undo(&mut self, action: &UndoAction) -> Option<UndoAction> {
         match action {
-            UndoAction::NodeMoved { node_id, old_position, new_position } => {
+            UndoAction::NodeMoved {
+                node_id,
+                old_position,
+                new_position,
+            } => {
                 if let Some(node) = self.nodes.get_mut(node_id) {
                     node.position = *old_position;
                     Some(UndoAction::NodeMoved {
@@ -441,7 +442,11 @@ impl UndoableFlowchart for Flowchart {
                     None
                 }
             }
-            UndoAction::PropertyChanged { node_id, old_node_type, new_node_type } => {
+            UndoAction::PropertyChanged {
+                node_id,
+                old_node_type,
+                new_node_type,
+            } => {
                 if let Some(node) = self.nodes.get_mut(node_id) {
                     node.node_type = old_node_type.clone();
                     Some(UndoAction::PropertyChanged {
@@ -477,12 +482,14 @@ impl UndoableFlowchart for Flowchart {
             UndoAction::NodeCreated { node_id } => {
                 // Remove the created node and its connections
                 if let Some(node) = self.nodes.remove(node_id) {
-                    let connections: Vec<Connection> = self.connections
+                    let connections: Vec<Connection> = self
+                        .connections
                         .iter()
                         .filter(|c| c.from == *node_id || c.to == *node_id)
                         .cloned()
                         .collect();
-                    self.connections.retain(|c| c.from != *node_id && c.to != *node_id);
+                    self.connections
+                        .retain(|c| c.from != *node_id && c.to != *node_id);
                     Some(UndoAction::NodeDeleted { node, connections })
                 } else {
                     None
@@ -490,14 +497,22 @@ impl UndoableFlowchart for Flowchart {
             }
             UndoAction::ConnectionCreated { from, to } => {
                 // Remove the created connection
-                if let Some(index) = self.connections.iter().position(|c| c.from == *from && c.to == *to) {
+                if let Some(index) = self
+                    .connections
+                    .iter()
+                    .position(|c| c.from == *from && c.to == *to)
+                {
                     let connection = self.connections.remove(index);
                     Some(UndoAction::ConnectionDeleted { connection, index })
                 } else {
                     None
                 }
             }
-            UndoAction::NodeRenamed { node_id, old_name, new_name } => {
+            UndoAction::NodeRenamed {
+                node_id,
+                old_name,
+                new_name,
+            } => {
                 if let Some(node) = self.nodes.get_mut(node_id) {
                     node.name = old_name.clone();
                     Some(UndoAction::NodeRenamed {

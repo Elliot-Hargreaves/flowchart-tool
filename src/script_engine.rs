@@ -1,25 +1,28 @@
 //! Unified JavaScript script execution engine
-//! 
+//!
 //! This module provides JavaScript script execution capabilities that work both in WASM
 //! and native environments using the boa pure-Rust JavaScript implementation.
-//! 
+//!
 //! # Security & Sandboxing
-//! 
+//!
 //! The JavaScript execution environment is sandboxed to ensure safe execution of
 //! user-provided scripts:
-//! 
+//!
 //! - **No File System Access**: boa_engine doesn't provide file system APIs
 //! - **No Network Access**: No socket, fetch, or HTTP APIs are available
 //! - **No eval()**: Dynamic code execution via eval() is disabled
 //! - **No Function() constructor**: Cannot create functions from strings
 //! - **Pure JavaScript Only**: Only safe, standard JavaScript operations are available
-//! 
+//!
 //! This makes it safe to execute scripts from untrusted sources, as they can only
 //! perform data transformations on the provided input without side effects.
 
-use serde_json::Value;
-use boa_engine::{Context, JsValue, Source, property::PropertyKey, JsString, object::builtins::JsArray, JsObject, js_string, JsResult};
 use boa_engine::property::NonMaxU32;
+use boa_engine::{
+    js_string, object::builtins::JsArray, property::PropertyKey, Context, JsObject, JsResult,
+    JsString, JsValue, Source,
+};
+use serde_json::Value;
 
 /// JavaScript script execution engine that works on all platforms
 pub struct JavaScriptEngine {
@@ -28,19 +31,18 @@ pub struct JavaScriptEngine {
 
 impl JavaScriptEngine {
     /// Create a new JavaScript script engine with sandboxed execution environment
-    /// 
+    ///
     /// The sandbox restricts access to potentially dangerous JavaScript features:
     /// - eval() is disabled to prevent dynamic code execution
     /// - Function() constructor is disabled
     /// - No file system or network access (boa doesn't provide these by default)
-    /// 
+    ///
     /// Only safe, pure JavaScript operations are available for data transformation.
     pub fn new() -> Result<Self, String> {
         let mut context = Context::default();
 
         // Disable dangerous JavaScript features for sandboxing
-        Self::setup_sandbox(&mut context)
-            .map_err(|e| format!("Failed to setup sandbox: {}", e))?;
+        Self::setup_sandbox(&mut context).map_err(|e| format!("Failed to setup sandbox: {}", e))?;
 
         Ok(Self { context })
     }
@@ -52,7 +54,7 @@ impl JavaScriptEngine {
         context.register_global_property(
             js_string!("eval"),
             undefined.clone(),
-            Default::default()
+            Default::default(),
         )?;
 
         // Disable Function constructor - prevents creating functions from strings
@@ -68,7 +70,7 @@ impl JavaScriptEngine {
     }
 
     /// Execute a JavaScript script without expecting a return value
-    /// 
+    ///
     /// This is useful for defining functions and setting up the environment.
     pub fn execute_script(&mut self, script: &str) -> Result<(), String> {
         let source = Source::from_bytes(script);
@@ -79,12 +81,13 @@ impl JavaScriptEngine {
     }
 
     /// Execute a JavaScript script with the given input data and return the result
-    /// 
+    ///
     /// The script receives the input as a global 'input' variable and should return a result.
     /// The input is provided as a parsed JavaScript object/value.
     pub fn execute(&mut self, script: &str, input: Value) -> Result<Value, String> {
         // Convert serde_json::Value to JsValue
-        let js_input = self.json_to_js_value(&input)
+        let js_input = self
+            .json_to_js_value(&input)
             .map_err(|e| format!("Failed to convert input to JavaScript value: {}", e))?;
 
         // Set the input as a global variable
@@ -95,7 +98,8 @@ impl JavaScriptEngine {
 
         // Execute the JavaScript code
         let source = Source::from_bytes(script);
-        let js_result = self.context
+        let js_result = self
+            .context
             .eval(source)
             .map_err(|e| format!("JavaScript execution error: {}", e))?;
 
@@ -105,13 +109,14 @@ impl JavaScriptEngine {
     }
 
     /// Call a JavaScript function by name with the given argument
-    /// 
+    ///
     /// The function must be defined in the global scope.
     pub fn call_function(&mut self, function_name: &str, arg: Value) -> Result<Value, String> {
         // Get the function from the global object
         let global = self.context.global_object().clone();
         let function_key = PropertyKey::String(JsString::from(function_name));
-        let function_value = global.get(function_key, &mut self.context)
+        let function_value = global
+            .get(function_key, &mut self.context)
             .map_err(|e| format!("Failed to get function '{}': {}", function_name, e))?;
 
         // Check if it's a callable function
@@ -123,7 +128,8 @@ impl JavaScriptEngine {
         let js_arg = self.json_to_js_value(&arg)?;
 
         // Call the function
-        let result = function_value.as_callable()
+        let result = function_value
+            .as_callable()
             .ok_or_else(|| format!("'{}' is not callable", function_name))?
             .call(&JsValue::undefined(), &[js_arg], &mut self.context)
             .map_err(|e| format!("Function call failed: {}", e))?;
@@ -145,7 +151,7 @@ impl JavaScriptEngine {
                 } else {
                     Err("Invalid number format".to_string())
                 }
-            },
+            }
             Value::String(s) => Ok(JsValue::String(JsString::from(s.as_str()))),
             Value::Array(arr) => {
                 // Create array using JsArray::new
@@ -153,18 +159,25 @@ impl JavaScriptEngine {
 
                 for (index, item) in arr.iter().enumerate() {
                     let js_item = self.json_to_js_value(item)?;
-                    js_array.set(index as u32, js_item, false, &mut self.context)
+                    js_array
+                        .set(index as u32, js_item, false, &mut self.context)
                         .map_err(|e| format!("Failed to set array element: {}", e))?;
                 }
                 Ok(js_array.into())
-            },
+            }
             Value::Object(obj) => {
                 // Create object using Object::create
                 let js_obj = JsObject::default();
 
                 for (key, val) in obj {
                     let js_val = self.json_to_js_value(val)?;
-                    js_obj.set(JsString::from(key.as_str()), js_val, false, &mut self.context)
+                    js_obj
+                        .set(
+                            JsString::from(key.as_str()),
+                            js_val,
+                            false,
+                            &mut self.context,
+                        )
                         .map_err(|e| format!("Failed to set object property: {}", e))?;
                 }
                 Ok(JsValue::Object(js_obj))
@@ -179,10 +192,11 @@ impl JavaScriptEngine {
             JsValue::Undefined => Ok(Value::Null),
             JsValue::Boolean(b) => Ok(Value::Bool(*b)),
             JsValue::String(s) => {
-                let string_val = s.to_std_string()
+                let string_val = s
+                    .to_std_string()
                     .map_err(|_| "Failed to convert JS string to Rust string")?;
                 Ok(Value::String(string_val))
-            },
+            }
             JsValue::Rational(r) => Ok(serde_json::Number::from_f64(*r)
                 .map(Value::Number)
                 .unwrap_or(Value::Null)),
@@ -192,7 +206,8 @@ impl JavaScriptEngine {
                 // Check if this is an array
                 if obj.is_array() {
                     let mut array = Vec::new();
-                    let length_property = obj.get(js_string!("length"), &mut self.context)
+                    let length_property = obj
+                        .get(js_string!("length"), &mut self.context)
                         .map_err(|e| format!("Failed to get array length: {}", e))?;
 
                     let length = if let JsValue::Integer(len) = length_property {
@@ -204,7 +219,11 @@ impl JavaScriptEngine {
                     };
 
                     for i in 0..length {
-                        let element = obj.get(PropertyKey::Index(NonMaxU32::new(i).unwrap()), &mut self.context)
+                        let element = obj
+                            .get(
+                                PropertyKey::Index(NonMaxU32::new(i).unwrap()),
+                                &mut self.context,
+                            )
                             .map_err(|e| format!("Failed to get array element: {}", e))?;
                         array.push(self.js_value_to_json(&element)?);
                     }
@@ -214,20 +233,23 @@ impl JavaScriptEngine {
                     let mut map = serde_json::Map::new();
 
                     // Get all enumerable own property keys
-                    let keys = obj.own_property_keys(&mut self.context)
+                    let keys = obj
+                        .own_property_keys(&mut self.context)
                         .map_err(|e| format!("Failed to get object keys: {}", e))?;
 
                     for key in keys {
                         // Convert key to string
                         let key_str = match &key {
-                            PropertyKey::String(s) => s.to_std_string()
+                            PropertyKey::String(s) => s
+                                .to_std_string()
                                 .map_err(|_| "Failed to convert key to string")?,
                             PropertyKey::Index(idx) => idx.get().to_string(),
                             PropertyKey::Symbol(_) => continue, // Skip symbols
                         };
 
                         // Get the value for this key
-                        let value = obj.get(key, &mut self.context)
+                        let value = obj
+                            .get(key, &mut self.context)
                             .map_err(|e| format!("Failed to get property value: {}", e))?;
 
                         // Convert and add to map
@@ -237,7 +259,7 @@ impl JavaScriptEngine {
 
                     Ok(Value::Object(map))
                 }
-            },
+            }
             JsValue::Symbol(_) => Err("Symbol not supported".to_string()),
         }
     }
@@ -446,7 +468,10 @@ mod tests {
         let output = &result[0].data;
 
         assert_eq!(output["stringValue"], "42");
-        assert_eq!(output["numberValue"], Value::Number(Number::from_f64(123.0).unwrap()));
+        assert_eq!(
+            output["numberValue"],
+            Value::Number(Number::from_f64(123.0).unwrap())
+        );
     }
 
     #[test]

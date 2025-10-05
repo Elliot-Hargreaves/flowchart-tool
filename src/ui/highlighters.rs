@@ -20,19 +20,53 @@ pub fn highlight_javascript(text: &str, font_id: egui::FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
 
     // Define colors for different token types
-    let keyword_color = Color32::from_rgb(86, 156, 214);     // Blue
-    let string_color = Color32::from_rgb(206, 145, 120);      // Orange
-    let comment_color = Color32::from_rgb(106, 153, 85);      // Green
-    let number_color = Color32::from_rgb(181, 206, 168);      // Light green
-    let function_color = Color32::from_rgb(220, 220, 170);    // Yellow
-    let default_color = Color32::from_rgb(212, 212, 212);     // Light gray
+    let keyword_color = Color32::from_rgb(86, 156, 214); // Blue
+    let string_color = Color32::from_rgb(206, 145, 120); // Orange
+    let comment_color = Color32::from_rgb(106, 153, 85); // Green
+    let number_color = Color32::from_rgb(181, 206, 168); // Light green
+    let function_color = Color32::from_rgb(220, 220, 170); // Yellow
+    let default_color = Color32::from_rgb(212, 212, 212); // Light gray
 
     let keywords = [
-        "function", "return", "if", "else", "for", "while", "do", "switch", "case",
-        "break", "continue", "var", "let", "const", "new", "this", "typeof",
-        "null", "undefined", "true", "false", "in", "of", "try", "catch",
-        "finally", "throw", "class", "extends", "super", "static", "async",
-        "await", "yield", "import", "export", "default", "from", "as",
+        "function",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "var",
+        "let",
+        "const",
+        "new",
+        "this",
+        "typeof",
+        "null",
+        "undefined",
+        "true",
+        "false",
+        "in",
+        "of",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "class",
+        "extends",
+        "super",
+        "static",
+        "async",
+        "await",
+        "yield",
+        "import",
+        "export",
+        "default",
+        "from",
+        "as",
     ];
 
     let mut chars = text.char_indices().peekable();
@@ -185,11 +219,11 @@ pub fn highlight_json(text: &str, font_id: egui::FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
 
     // Define colors for different token types
-    let string_color = Color32::from_rgb(206, 145, 120);      // Orange
-    let number_color = Color32::from_rgb(181, 206, 168);      // Light green
-    let keyword_color = Color32::from_rgb(86, 156, 214);      // Blue (for true/false/null)
-    let key_color = Color32::from_rgb(156, 220, 254);         // Light blue (for object keys)
-    let default_color = Color32::from_rgb(212, 212, 212);     // Light gray
+    let string_color = Color32::from_rgb(206, 145, 120); // Orange
+    let number_color = Color32::from_rgb(181, 206, 168); // Light green
+    let keyword_color = Color32::from_rgb(86, 156, 214); // Blue (for true/false/null)
+    let key_color = Color32::from_rgb(156, 220, 254); // Light blue (for object keys)
+    let default_color = Color32::from_rgb(212, 212, 212); // Light gray
 
     let mut chars = text.char_indices().peekable();
     let mut in_key_position = false; // Track if we're expecting an object key
@@ -234,22 +268,30 @@ pub fn highlight_json(text: &str, font_id: egui::FontId) -> LayoutJob {
                 string_color
             };
 
-            job.append(
-                string_text,
-                0.0,
-                TextFormat::simple(font_id.clone(), color),
-            );
+            job.append(string_text, 0.0, TextFormat::simple(font_id.clone(), color));
             continue;
         }
 
         // Check for numbers (including negative)
-        if c.is_ascii_digit() || (c == '-' && chars.peek().map(|&(_, ch)| ch.is_ascii_digit()).unwrap_or(false)) {
+        if c.is_ascii_digit()
+            || (c == '-'
+                && chars
+                    .peek()
+                    .map(|&(_, ch)| ch.is_ascii_digit())
+                    .unwrap_or(false))
+        {
             let start = i;
             if c == '-' {
                 chars.next(); // consume the digit after '-'
             }
             while let Some(&(_, ch)) = chars.peek() {
-                if ch.is_ascii_digit() || ch == '.' || ch == 'e' || ch == 'E' || ch == '+' || ch == '-' {
+                if ch.is_ascii_digit()
+                    || ch == '.'
+                    || ch == 'e'
+                    || ch == 'E'
+                    || ch == '+'
+                    || ch == '-'
+                {
                     chars.next();
                 } else {
                     break;

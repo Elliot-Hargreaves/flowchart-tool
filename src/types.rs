@@ -1,10 +1,10 @@
 //! Core data types and structures for the flowchart tool.
-//! 
+//!
 //! This module defines all the fundamental data structures used throughout the application,
 //! including nodes, connections, messages, and the main flowchart structure.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Unique identifier for flowchart nodes.
@@ -39,7 +39,7 @@ pub enum SimulationState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeType {
     /// A node that generates messages at a specified rate
-    Producer { 
+    Producer {
         /// JSON template for the message data to produce
         message_template: serde_json::Value,
         /// Which step to start producing messages on (0-based)
@@ -53,14 +53,14 @@ pub enum NodeType {
         messages_produced: u32,
     },
     /// A node that consumes and destroys incoming messages
-    Consumer { 
+    Consumer {
         /// Maximum number of messages to consume per simulation step
-        consumption_rate: u32 
+        consumption_rate: u32,
     },
     /// A node that transforms messages using a Lua script
-    Transformer { 
+    Transformer {
         /// Lua script code for message transformation
-        script: String 
+        script: String,
     },
 }
 
@@ -81,15 +81,15 @@ pub struct FlowchartNode {
 
 impl FlowchartNode {
     /// Creates a new flowchart node with the given parameters.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The display name for the node
     /// * `position` - The (x, y) position on the canvas
     /// * `node_type` - The type and configuration of the node
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new `FlowchartNode` with a unique ID and idle state.
     pub fn new(name: String, position: (f32, f32), node_type: NodeType) -> Self {
         Self {
@@ -115,14 +115,14 @@ pub struct Connection {
 
 impl Connection {
     /// Creates a new connection between two nodes.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `from` - The ID of the source node
     /// * `to` - The ID of the destination node
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new empty connection between the specified nodes.
     pub fn new(from: NodeId, to: NodeId) -> Self {
         Self {
@@ -144,13 +144,13 @@ pub struct Message {
 
 impl Message {
     /// Creates a new message with the given data payload.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `data` - JSON data to be carried by this message
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A new message with a unique ID, positioned at the start of any connection.
     pub fn new(data: serde_json::Value) -> Self {
         Self {
@@ -202,13 +202,13 @@ impl Flowchart {
     }
 
     /// Adds a node to the flowchart.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node` - The node to add to the flowchart
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// The ID of the newly added node.
     pub fn add_node(&mut self, node: FlowchartNode) -> NodeId {
         let id = node.id;
@@ -217,14 +217,14 @@ impl Flowchart {
     }
 
     /// Adds a connection between two existing nodes.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `from` - The ID of the source node
     /// * `to` - The ID of the destination node
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// `Ok(())` if the connection was added successfully, or an error message if either node doesn't exist.
     pub fn add_connection(&mut self, from: NodeId, to: NodeId) -> Result<(), String> {
         if !self.nodes.contains_key(&from) {
@@ -239,19 +239,20 @@ impl Flowchart {
     }
 
     /// Removes a node and all its associated connections from the flowchart.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node_id` - The ID of the node to remove
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// `true` if the node was found and removed, `false` if the node didn't exist.
     pub fn remove_node(&mut self, node_id: &NodeId) -> bool {
         let removed = self.nodes.remove(node_id).is_some();
         if removed {
             // Remove all connections involving this node
-            self.connections.retain(|conn| conn.from != *node_id && conn.to != *node_id);
+            self.connections
+                .retain(|conn| conn.from != *node_id && conn.to != *node_id);
         }
         removed
     }
@@ -267,7 +268,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test Node".to_string(),
             (100.0, 200.0),
-            NodeType::Consumer { consumption_rate: 5 },
+            NodeType::Consumer {
+                consumption_rate: 5,
+            },
         );
 
         assert_eq!(node.name, "Test Node");
@@ -291,7 +294,13 @@ mod tests {
             },
         );
 
-        if let NodeType::Producer { message_template, start_step, messages_per_cycle, .. } = &node.node_type {
+        if let NodeType::Producer {
+            message_template,
+            start_step,
+            messages_per_cycle,
+            ..
+        } = &node.node_type
+        {
             assert_eq!(*message_template, template);
             assert_eq!(*start_step, 10);
             assert_eq!(*messages_per_cycle, 3);
@@ -306,10 +315,15 @@ mod tests {
         let node = FlowchartNode::new(
             "Transformer".to_string(),
             (50.0, 50.0),
-            NodeType::Transformer { script: script.clone() },
+            NodeType::Transformer {
+                script: script.clone(),
+            },
         );
 
-        if let NodeType::Transformer { script: node_script } = &node.node_type {
+        if let NodeType::Transformer {
+            script: node_script,
+        } = &node.node_type
+        {
             assert_eq!(*node_script, script);
         } else {
             panic!("Expected Transformer node type");
@@ -352,7 +366,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test".to_string(),
             (0.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let node_id = node.id;
 
@@ -381,7 +397,9 @@ mod tests {
         let node2 = FlowchartNode::new(
             "Node2".to_string(),
             (100.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
 
         flowchart.add_node(node1);
@@ -408,7 +426,9 @@ mod tests {
         let node2 = FlowchartNode::new(
             "Node2".to_string(),
             (100.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
 
         let id1 = flowchart.add_node(node1);
@@ -429,7 +449,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Node".to_string(),
             (0.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let id = flowchart.add_node(node);
         let invalid_id = Uuid::new_v4();
@@ -473,7 +495,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test".to_string(),
             (0.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let node_id = flowchart.add_node(node);
 
@@ -511,12 +535,16 @@ mod tests {
         let node2 = FlowchartNode::new(
             "Node2".to_string(),
             (100.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let node3 = FlowchartNode::new(
             "Node3".to_string(),
             (200.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
 
         let id1 = flowchart.add_node(node1);
@@ -543,7 +571,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test Node".to_string(),
             (50.0, 100.0),
-            NodeType::Consumer { consumption_rate: 5 },
+            NodeType::Consumer {
+                consumption_rate: 5,
+            },
         );
         flowchart.add_node(node);
 
@@ -562,7 +592,9 @@ mod tests {
         let node = FlowchartNode::new(
             "Test Node".to_string(),
             (50.0, 100.0),
-            NodeType::Consumer { consumption_rate: 5 },
+            NodeType::Consumer {
+                consumption_rate: 5,
+            },
         );
         let node_id = original.add_node(node);
 
@@ -595,7 +627,9 @@ mod tests {
         let node2 = FlowchartNode::new(
             "Consumer".to_string(),
             (200.0, 100.0),
-            NodeType::Consumer { consumption_rate: 2 },
+            NodeType::Consumer {
+                consumption_rate: 2,
+            },
         );
 
         let id1 = original.add_node(node1);
@@ -616,7 +650,9 @@ mod tests {
         let mut node = FlowchartNode::new(
             "Test".to_string(),
             (0.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
 
         assert_eq!(node.state, NodeState::Idle);

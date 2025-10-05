@@ -3,7 +3,7 @@
 //! This module handles all file I/O operations including native file dialogs
 //! and WASM-compatible browser-based file operations.
 
-use super::state::{FlowchartApp, FileOperationResult, PendingSaveOperation, PendingLoadOperation};
+use super::state::{FileOperationResult, FlowchartApp, PendingLoadOperation, PendingSaveOperation};
 use crate::types::Flowchart;
 use eframe::egui;
 
@@ -64,7 +64,9 @@ impl FlowchartApp {
                         match Self::trigger_download("flowchart.json", &flowchart_json) {
                             Ok(_) => {
                                 if let Some(tx) = sender {
-                                    let _ = tx.send(FileOperationResult::SaveCompleted("flowchart.json".to_string()));
+                                    let _ = tx.send(FileOperationResult::SaveCompleted(
+                                        "flowchart.json".to_string(),
+                                    ));
                                 }
                             }
                             Err(e) => {
@@ -90,14 +92,14 @@ impl FlowchartApp {
                                     Ok(_) => {
                                         if let Some(tx) = sender {
                                             let _ = tx.send(FileOperationResult::SaveCompleted(
-                                                path.display().to_string()
+                                                path.display().to_string(),
                                             ));
                                         }
                                     }
                                     Err(e) => {
                                         if let Some(tx) = sender {
                                             let _ = tx.send(FileOperationResult::OperationFailed(
-                                                format!("Failed to save file: {}", e)
+                                                format!("Failed to save file: {}", e),
                                             ));
                                         }
                                     }
@@ -115,13 +117,14 @@ impl FlowchartApp {
                                 match std::fs::write(&path, flowchart_json) {
                                     Ok(_) => {
                                         if let Some(tx) = sender {
-                                            let _ = tx.send(FileOperationResult::SaveCompleted(path));
+                                            let _ =
+                                                tx.send(FileOperationResult::SaveCompleted(path));
                                         }
                                     }
                                     Err(e) => {
                                         if let Some(tx) = sender {
                                             let _ = tx.send(FileOperationResult::OperationFailed(
-                                                format!("Failed to save file: {}", e)
+                                                format!("Failed to save file: {}", e),
                                             ));
                                         }
                                     }
@@ -157,7 +160,9 @@ impl FlowchartApp {
                             match Self::read_file(file).await {
                                 Ok(content) => {
                                     if let Some(tx) = sender {
-                                        let _ = tx.send(FileOperationResult::LoadCompleted(filename, content));
+                                        let _ = tx.send(FileOperationResult::LoadCompleted(
+                                            filename, content,
+                                        ));
                                     }
                                 }
                                 Err(e) => {
@@ -189,15 +194,16 @@ impl FlowchartApp {
                                 if let Some(tx) = sender {
                                     let _ = tx.send(FileOperationResult::LoadCompleted(
                                         path.display().to_string(),
-                                        json
+                                        json,
                                     ));
                                 }
                             }
                             Err(e) => {
                                 if let Some(tx) = sender {
-                                    let _ = tx.send(FileOperationResult::OperationFailed(
-                                        format!("Failed to read file: {}", e)
-                                    ));
+                                    let _ = tx.send(FileOperationResult::OperationFailed(format!(
+                                        "Failed to read file: {}",
+                                        e
+                                    )));
                                 }
                             }
                         }
@@ -252,21 +258,22 @@ impl FlowchartApp {
         anchor.set_download(filename);
         anchor.style().set_property("display", "none").ok();
 
-        document.body()
+        document
+            .body()
             .ok_or("No body found")?
             .append_child(&anchor)
             .map_err(|_| "Failed to append anchor")?;
 
         anchor.click();
 
-        document.body()
+        document
+            .body()
             .ok_or("No body found")?
             .remove_child(&anchor)
             .map_err(|_| "Failed to remove anchor")?;
 
         // Clean up the object URL
-        web_sys::Url::revoke_object_url(&url)
-            .map_err(|_| "Failed to revoke object URL")?;
+        web_sys::Url::revoke_object_url(&url).map_err(|_| "Failed to revoke object URL")?;
 
         Ok(())
     }
@@ -280,8 +287,8 @@ impl FlowchartApp {
     /// The selected `File` object, or `None` if the user cancelled or the operation failed.
     #[cfg(target_arch = "wasm32")]
     async fn show_open_file_picker() -> Option<web_sys::File> {
-        use crate::wasm_bindgen::JsCast;
         use crate::wasm_bindgen::closure::Closure;
+        use crate::wasm_bindgen::JsCast;
 
         let window = web_sys::window()?;
         let document = window.document()?;
@@ -302,12 +309,12 @@ impl FlowchartApp {
         let sender = std::rc::Rc::new(std::cell::RefCell::new(Some(sender)));
 
         let onchange = Closure::wrap(Box::new(move |event: web_sys::Event| {
-            let input = event.target()
+            let input = event
+                .target()
                 .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok());
 
             if let Some(input) = input {
-                let file = input.files()
-                    .and_then(|files| files.get(0));
+                let file = input.files().and_then(|files| files.get(0));
 
                 if let Some(sender) = sender.borrow_mut().take() {
                     let _ = sender.send(file);
@@ -347,36 +354,45 @@ impl FlowchartApp {
         use crate::wasm_bindgen::JsCast;
         use crate::wasm_bindgen::JsValue;
 
-        let file_reader = web_sys::FileReader::new()
-            .map_err(|_| "Failed to create FileReader".to_string())?;
+        let file_reader =
+            web_sys::FileReader::new().map_err(|_| "Failed to create FileReader".to_string())?;
 
         let promise = js_sys::Promise::new(&mut |resolve, reject| {
             let reader = file_reader.clone();
 
-            let onload = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
-                if let Ok(result) = reader.result() {
-                    let _ = resolve.call1(&JsValue::NULL, &result);
-                }
-            }) as Box<dyn FnMut(_)>);
+            let onload = crate::wasm_bindgen::closure::Closure::wrap(Box::new(
+                move |_event: web_sys::ProgressEvent| {
+                    if let Ok(result) = reader.result() {
+                        let _ = resolve.call1(&JsValue::NULL, &result);
+                    }
+                },
+            )
+                as Box<dyn FnMut(_)>);
 
             file_reader.set_onload(Some(onload.as_ref().unchecked_ref()));
             onload.forget();
 
-            let onerror = crate::wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::ProgressEvent| {
-                let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("Failed to read file"));
-            }) as Box<dyn FnMut(_)>);
+            let onerror = crate::wasm_bindgen::closure::Closure::wrap(Box::new(
+                move |_event: web_sys::ProgressEvent| {
+                    let _ = reject.call1(&JsValue::NULL, &JsValue::from_str("Failed to read file"));
+                },
+            )
+                as Box<dyn FnMut(_)>);
 
             file_reader.set_onerror(Some(onerror.as_ref().unchecked_ref()));
             onerror.forget();
         });
 
-        file_reader.read_as_text(&file)
+        file_reader
+            .read_as_text(&file)
             .map_err(|_| "Failed to start reading file".to_string())?;
 
-        let result = wasm_bindgen_futures::JsFuture::from(promise).await
+        let result = wasm_bindgen_futures::JsFuture::from(promise)
+            .await
             .map_err(|e| format!("Failed to read file: {:?}", e))?;
 
-        result.as_string()
+        result
+            .as_string()
             .ok_or_else(|| "File content is not a string".to_string())
     }
 

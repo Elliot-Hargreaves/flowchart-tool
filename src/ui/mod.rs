@@ -1,5 +1,5 @@
 //! User interface components and rendering logic for the flowchart tool.
-//! 
+//!
 //! This module contains all the UI-related code including the main application struct,
 //! canvas rendering, property panels, context menus, and user interaction handling.
 //!
@@ -11,18 +11,18 @@
 //! - `canvas` - Canvas navigation, zooming, panning, and interaction
 //! - `rendering` - Drawing nodes, connections, grid, and UI elements
 
-mod highlighters;
-mod state;
-mod file_ops;
 mod canvas;
+mod file_ops;
+mod highlighters;
 mod rendering;
+mod state;
 mod undo;
 
 pub use state::FlowchartApp;
 pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
-use crate::types::*;
 use crate::simulation::SimulationEngine;
+use crate::types::*;
 use eframe::egui;
 use egui::TextBuffer;
 
@@ -72,14 +72,20 @@ impl eframe::App for FlowchartApp {
 
             // Handle delivered messages
             for (node_id, message) in delivered_messages {
-                match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
-                    Ok(_) => {},
+                match self
+                    .simulation_engine
+                    .deliver_message(node_id, message, &mut self.flowchart)
+                {
+                    Ok(_) => {}
                     Err(error_msg) => {
                         // Stop simulation on error
                         self.is_simulation_running = false;
                         self.flowchart.simulation_state = SimulationState::Stopped;
                         self.error_node = Some(node_id);
-                        eprintln!("Simulation stopped due to error in node {}: {}", node_id, error_msg);
+                        eprintln!(
+                            "Simulation stopped due to error in node {}: {}",
+                            node_id, error_msg
+                        );
                     }
                 }
             }
@@ -106,14 +112,16 @@ impl FlowchartApp {
 
         if !is_editing_text {
             // Ctrl+Z for undo
-            if ctx.input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command && !i.modifiers.shift) {
+            if ctx
+                .input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command && !i.modifiers.shift)
+            {
                 self.perform_undo();
             }
             // Ctrl+Shift+Z or Ctrl+Y for redo
-            else if ctx.input(|i| 
-                (i.key_pressed(egui::Key::Z) && i.modifiers.command && i.modifiers.shift) ||
-                (i.key_pressed(egui::Key::Y) && i.modifiers.command)
-            ) {
+            else if ctx.input(|i| {
+                (i.key_pressed(egui::Key::Z) && i.modifiers.command && i.modifiers.shift)
+                    || (i.key_pressed(egui::Key::Y) && i.modifiers.command)
+            }) {
                 self.perform_redo();
             }
         }
@@ -132,24 +140,26 @@ impl FlowchartApp {
             if let Some(selected_node) = self.interaction.selected_node {
                 // Store node and its connections for undo
                 if let Some(node) = self.flowchart.nodes.get(&selected_node).cloned() {
-                    let connections: Vec<Connection> = self.flowchart.connections
+                    let connections: Vec<Connection> = self
+                        .flowchart
+                        .connections
                         .iter()
                         .filter(|c| c.from == selected_node || c.to == selected_node)
                         .cloned()
                         .collect();
 
                     // Record undo action before deletion
-                    self.undo_history.push_action(UndoAction::NodeDeleted {
-                        node,
-                        connections,
-                    });
+                    self.undo_history
+                        .push_action(UndoAction::NodeDeleted { node, connections });
                 }
 
                 // Remove the selected node
                 self.flowchart.nodes.remove(&selected_node);
 
                 // Remove all connections involving this node
-                self.flowchart.connections.retain(|c| c.from != selected_node && c.to != selected_node);
+                self.flowchart
+                    .connections
+                    .retain(|c| c.from != selected_node && c.to != selected_node);
 
                 // Clear selection
                 self.interaction.selected_node = None;
@@ -161,10 +171,11 @@ impl FlowchartApp {
                     let connection = self.flowchart.connections[conn_idx].clone();
 
                     // Record undo action before deletion
-                    self.undo_history.push_action(UndoAction::ConnectionDeleted {
-                        connection,
-                        index: conn_idx,
-                    });
+                    self.undo_history
+                        .push_action(UndoAction::ConnectionDeleted {
+                            connection,
+                            index: conn_idx,
+                        });
 
                     self.flowchart.connections.remove(conn_idx);
                     self.interaction.selected_connection = None;
@@ -233,7 +244,10 @@ impl FlowchartApp {
                 // Reset producer counters and node states
                 for node in self.flowchart.nodes.values_mut() {
                     node.state = NodeState::Idle;
-                    if let NodeType::Producer { messages_produced, .. } = &mut node.node_type {
+                    if let NodeType::Producer {
+                        messages_produced, ..
+                    } = &mut node.node_type
+                    {
                         *messages_produced = 0;
                     }
                 }
@@ -241,8 +255,12 @@ impl FlowchartApp {
             if ui.button("Step").clicked() {
                 let delivered_messages = self.simulation_engine.step(&mut self.flowchart);
                 for (node_id, message) in delivered_messages {
-                    match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
-                        Ok(_) => {},
+                    match self.simulation_engine.deliver_message(
+                        node_id,
+                        message,
+                        &mut self.flowchart,
+                    ) {
+                        Ok(_) => {}
                         Err(error_msg) => {
                             self.error_node = Some(node_id);
                             eprintln!("Error in node {}: {}", node_id, error_msg);
@@ -264,10 +282,18 @@ impl FlowchartApp {
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(file_path) = &self.file.current_path {
-                    let status = if self.file.has_unsaved_changes { "*" } else { "" };
+                    let status = if self.file.has_unsaved_changes {
+                        "*"
+                    } else {
+                        ""
+                    };
                     ui.label(format!("{}{}", file_path, status));
                 } else {
-                    let status = if self.file.has_unsaved_changes { "Untitled*" } else { "Untitled" };
+                    let status = if self.file.has_unsaved_changes {
+                        "Untitled*"
+                    } else {
+                        "Untitled"
+                    };
                     ui.label(status);
                 }
 
@@ -352,7 +378,10 @@ impl FlowchartApp {
         }
 
         ui.separator();
-        ui.label(format!("Messages in transit: {}", connection.messages.len()));
+        ui.label(format!(
+            "Messages in transit: {}",
+            connection.messages.len()
+        ));
 
         // Show message contents
         if !connection.messages.is_empty() {
@@ -376,7 +405,7 @@ impl FlowchartApp {
                                             .desired_rows(5)
                                             .desired_width(f32::INFINITY)
                                             .code_editor()
-                                            .interactive(false)
+                                            .interactive(false),
                                     );
                                 });
                         });
@@ -429,12 +458,16 @@ impl FlowchartApp {
     /// * `field_id` - The ID of the text field
     fn select_all_text_in_field(&self, ui: &mut egui::Ui, field_id: egui::Id) {
         ui.memory_mut(|mem| {
-            let state = mem.data.get_temp_mut_or_default::<egui::text_edit::TextEditState>(field_id);
+            let state = mem
+                .data
+                .get_temp_mut_or_default::<egui::text_edit::TextEditState>(field_id);
             let text_len = self.interaction.temp_node_name.len();
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(text_len),
-            )));
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(text_len),
+                )));
         });
     }
 
@@ -486,16 +519,18 @@ impl FlowchartApp {
             let old_node_type = node.node_type.clone();
             let mut changed = false;
 
-            if let NodeType::Producer { 
+            if let NodeType::Producer {
                 mut message_template,
                 mut start_step,
                 mut messages_per_cycle,
                 mut steps_between_cycles,
-                messages_produced
-            } = node.node_type.clone() {
+                messages_produced,
+            } = node.node_type.clone()
+            {
                 match property {
                     "start_step" => {
-                        if let Ok(value) = self.interaction.temp_producer_start_step.parse::<u64>() {
+                        if let Ok(value) = self.interaction.temp_producer_start_step.parse::<u64>()
+                        {
                             if start_step != value {
                                 start_step = value;
                                 changed = true;
@@ -503,7 +538,11 @@ impl FlowchartApp {
                         }
                     }
                     "messages_per_cycle" => {
-                        if let Ok(value) = self.interaction.temp_producer_messages_per_cycle.parse::<u32>() {
+                        if let Ok(value) = self
+                            .interaction
+                            .temp_producer_messages_per_cycle
+                            .parse::<u32>()
+                        {
                             if messages_per_cycle != value {
                                 messages_per_cycle = value;
                                 changed = true;
@@ -511,7 +550,9 @@ impl FlowchartApp {
                         }
                     }
                     "steps_between_cycles" => {
-                        if let Ok(value) = self.interaction.temp_producer_steps_between.parse::<u32>() {
+                        if let Ok(value) =
+                            self.interaction.temp_producer_steps_between.parse::<u32>()
+                        {
                             if steps_between_cycles != value {
                                 steps_between_cycles = value;
                                 changed = true;
@@ -520,7 +561,7 @@ impl FlowchartApp {
                     }
                     "message_template" => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(
-                            &self.interaction.temp_producer_message_template
+                            &self.interaction.temp_producer_message_template,
                         ) {
                             if message_template != value {
                                 message_template = value;
@@ -567,7 +608,10 @@ impl FlowchartApp {
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             if let NodeType::Transformer { script } = &node.node_type {
                 if property == "script" {
-                    let new_script = self.interaction.temp_transformer_script.replace("\t", "    ");
+                    let new_script = self
+                        .interaction
+                        .temp_transformer_script
+                        .replace("\t", "    ");
                     // Only record undo if script actually changed
                     if script != &new_script {
                         let old_node_type = node.node_type.clone();
@@ -598,15 +642,18 @@ impl FlowchartApp {
     /// * `ui` - The egui UI context
     /// * `node` - The node to display information for
     fn draw_node_type_info(&mut self, ui: &mut egui::Ui, node: &FlowchartNode) {
-        ui.label(format!("Type: {}", match &node.node_type {
-            NodeType::Producer { .. } => "Producer",
-            NodeType::Consumer { .. } => "Consumer",
-            NodeType::Transformer { .. } => "Transformer",
-        }));
+        ui.label(format!(
+            "Type: {}",
+            match &node.node_type {
+                NodeType::Producer { .. } => "Producer",
+                NodeType::Consumer { .. } => "Consumer",
+                NodeType::Transformer { .. } => "Transformer",
+            }
+        ));
 
         // Type-specific properties
         match &node.node_type {
-            NodeType::Producer { 
+            NodeType::Producer {
                 message_template,
                 start_step,
                 messages_per_cycle,
@@ -618,31 +665,44 @@ impl FlowchartApp {
                     self.interaction.temp_producer_start_step = start_step.to_string();
                 }
                 if self.interaction.temp_producer_messages_per_cycle.is_empty() {
-                    self.interaction.temp_producer_messages_per_cycle = messages_per_cycle.to_string();
+                    self.interaction.temp_producer_messages_per_cycle =
+                        messages_per_cycle.to_string();
                 }
                 if self.interaction.temp_producer_steps_between.is_empty() {
                     self.interaction.temp_producer_steps_between = steps_between_cycles.to_string();
                 }
                 if self.interaction.temp_producer_message_template.is_empty() {
-                    self.interaction.temp_producer_message_template = 
+                    self.interaction.temp_producer_message_template =
                         serde_json::to_string_pretty(message_template)
                             .unwrap_or_else(|_| "{}".to_string());
                 }
 
                 ui.label("Start Step:");
-                if ui.text_edit_singleline(&mut self.interaction.temp_producer_start_step).changed() {
+                if ui
+                    .text_edit_singleline(&mut self.interaction.temp_producer_start_step)
+                    .changed()
+                {
                     self.update_producer_property(node.id, "start_step");
                 }
 
                 ui.label("Total Messages:");
-                if ui.text_edit_singleline(&mut self.interaction.temp_producer_messages_per_cycle).changed() {
+                if ui
+                    .text_edit_singleline(&mut self.interaction.temp_producer_messages_per_cycle)
+                    .changed()
+                {
                     self.update_producer_property(node.id, "messages_per_cycle");
                 }
 
-                ui.label(format!("Messages Produced: {}/{}", messages_produced, messages_per_cycle));
+                ui.label(format!(
+                    "Messages Produced: {}/{}",
+                    messages_produced, messages_per_cycle
+                ));
 
                 ui.label("Steps Between Cycles:");
-                if ui.text_edit_singleline(&mut self.interaction.temp_producer_steps_between).changed() {
+                if ui
+                    .text_edit_singleline(&mut self.interaction.temp_producer_steps_between)
+                    .changed()
+                {
                     self.update_producer_property(node.id, "steps_between_cycles");
                 }
 
@@ -653,23 +713,30 @@ impl FlowchartApp {
                 let layouter_ref = self.interaction.temp_producer_message_template.clone();
                 let mut layouter = rendering::create_json_layouter(&layouter_ref);
 
-                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
-                    .desired_rows(5)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace)
-                    .lock_focus(true)
-                    .layouter(&mut layouter));
+                let text_edit_response = ui.add(
+                    egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
+                        .desired_rows(5)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace)
+                        .lock_focus(true)
+                        .layouter(&mut layouter),
+                );
 
                 // Handle Tab key to insert 4 spaces
                 if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
                     // Get cursor position from text edit state
-                    let cursor_pos = ui.memory(|mem| {
-                        mem.data.get_temp::<egui::text_edit::TextEditState>(text_edit_response.id)
-                            .and_then(|state| state.cursor.char_range())
-                            .map(|range| range.primary.index)
-                    }).unwrap_or(self.interaction.temp_producer_message_template.len());
+                    let cursor_pos = ui
+                        .memory(|mem| {
+                            mem.data
+                                .get_temp::<egui::text_edit::TextEditState>(text_edit_response.id)
+                                .and_then(|state| state.cursor.char_range())
+                                .map(|range| range.primary.index)
+                        })
+                        .unwrap_or(self.interaction.temp_producer_message_template.len());
 
-                    self.interaction.temp_producer_message_template.insert_str(cursor_pos, "    ");
+                    self.interaction
+                        .temp_producer_message_template
+                        .insert_str(cursor_pos, "    ");
                     self.update_producer_property(node.id, "message_template");
                 } else if text_edit_response.changed() {
                     self.update_producer_property(node.id, "message_template");
@@ -690,12 +757,14 @@ impl FlowchartApp {
                 let layouter_ref = self.interaction.temp_transformer_script.clone();
                 let mut layouter = rendering::create_js_layouter(&layouter_ref);
 
-                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
-                    .desired_rows(10)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace)
-                    .lock_focus(true)
-                    .layouter(&mut layouter));
+                let text_edit_response = ui.add(
+                    egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
+                        .desired_rows(10)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace)
+                        .lock_focus(true)
+                        .layouter(&mut layouter),
+                );
 
                 if text_edit_response.changed() {
                     self.update_transformer_property(node.id, "script");
@@ -712,7 +781,10 @@ impl FlowchartApp {
     /// * `node` - The node to display status for
     fn draw_node_status_info(&self, ui: &mut egui::Ui, node: &FlowchartNode) {
         ui.label(format!("State: {:?}", node.state));
-        ui.label(format!("Position: ({:.1}, {:.1})", node.position.0, node.position.1));
+        ui.label(format!(
+            "Position: ({:.1}, {:.1})",
+            node.position.0, node.position.1
+        ));
     }
 
     /// Renders information shown when no node is selected.
@@ -735,7 +807,10 @@ impl FlowchartApp {
     /// * `ui` - The egui UI context
     fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
         // Use the stored screen coordinates for menu positioning
-        let screen_pos = egui::pos2(self.context_menu.screen_pos.0, self.context_menu.screen_pos.1);
+        let screen_pos = egui::pos2(
+            self.context_menu.screen_pos.0,
+            self.context_menu.screen_pos.1,
+        );
 
         let area_response = egui::Area::new(egui::Id::new("context_menu"))
             .fixed_pos(screen_pos)
@@ -777,14 +852,13 @@ impl FlowchartApp {
             });
 
         // Handle click-outside-to-close after the first frame
-        if !self.context_menu.just_opened
-            && ui.input(|i| i.pointer.primary_clicked()) {
-                if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
-                    if !area_response.response.rect.contains(click_pos) {
-                        self.context_menu.show = false;
-                    }
+        if !self.context_menu.just_opened && ui.input(|i| i.pointer.primary_clicked()) {
+            if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                if !area_response.response.rect.contains(click_pos) {
+                    self.context_menu.show = false;
                 }
             }
+        }
 
         self.context_menu.just_opened = false;
     }
@@ -807,7 +881,8 @@ impl FlowchartApp {
         self.flowchart.add_node(new_node);
 
         // Record undo action for node creation
-        self.undo_history.push_action(UndoAction::NodeCreated { node_id });
+        self.undo_history
+            .push_action(UndoAction::NodeCreated { node_id });
 
         // Select the new node and start editing its name immediately
         self.interaction.selected_node = Some(node_id);
@@ -823,10 +898,8 @@ impl FlowchartApp {
     ///
     /// * `ui` - The egui UI context
     fn draw_canvas(&mut self, ui: &mut egui::Ui) {
-        let (response, painter) = ui.allocate_painter(
-            ui.available_size(),
-            egui::Sense::click_and_drag()
-        );
+        let (response, painter) =
+            ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
         // Initialize canvas to center the origin on first frame
         if self.canvas.offset == egui::Vec2::ZERO && self.node_counter == 0 {
@@ -864,7 +937,10 @@ impl FlowchartApp {
     /// * `response` - The canvas response
     fn handle_canvas_interactions(&mut self, _ui: &mut egui::Ui, response: &egui::Response) {
         // Left-click for selection (only if not dragging or panning)
-        if response.clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
+        if response.clicked()
+            && !self.interaction.is_panning
+            && self.interaction.dragging_node.is_none()
+        {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(pos);
 
@@ -894,7 +970,10 @@ impl FlowchartApp {
         }
 
         // Right-click for context menu
-        if response.secondary_clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
+        if response.secondary_clicked()
+            && !self.interaction.is_panning
+            && self.interaction.dragging_node.is_none()
+        {
             if let Some(screen_pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(screen_pos);
                 self.context_menu.screen_pos = (screen_pos.x, screen_pos.y);
@@ -918,7 +997,6 @@ impl FlowchartApp {
     fn perform_undo(&mut self) {
         if let Some(action) = self.undo_history.pop_undo() {
             if let Some(redo_action) = self.flowchart.apply_undo(&action) {
-                self.undo_history.push_redo(redo_action);
                 self.file.has_unsaved_changes = true;
 
                 // Clear selection and temp values to refresh UI

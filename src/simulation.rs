@@ -1,15 +1,15 @@
 //! Simulation engine and logic for the flowchart tool.
-//! 
+//!
 //! This module handles the execution of flowchart simulations, including message
 //! generation, consumption, transformation via Lua scripts, and message routing
 //! between nodes.
 
+use crate::script_engine::{create_script_engine, JavaScriptEngine};
 use crate::types::*;
-use crate::script_engine::{JavaScriptEngine, create_script_engine};
 use serde::{Deserialize, Serialize};
 
 /// Engine responsible for running flowchart simulations.
-/// 
+///
 /// The simulation engine processes nodes in sequence, handles message flow,
 /// and executes transformation scripts.
 #[derive(Serialize, Deserialize)]
@@ -29,24 +29,22 @@ impl SimulationEngine {
     /// Creates a new simulation engine with a fresh Lua environment.
     pub fn new() -> Self {
         let script_engine = create_script_engine().ok();
-        Self {
-            script_engine,
-        }
+        Self { script_engine }
     }
 
     /// Executes a single simulation step on the given flowchart.
-    /// 
+    ///
     /// This method:
     /// 1. Moves messages along connections
     /// 2. Delivers messages that have reached their destinations
     /// 3. Processes each node according to its type
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `flowchart` - The flowchart to simulate
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A vector of messages that were delivered during this step.
     pub fn step(&mut self, flowchart: &mut Flowchart) -> Vec<(NodeId, Message)> {
         let mut delivered_messages = Vec::new();
@@ -67,7 +65,7 @@ impl SimulationEngine {
         for node_id in node_ids {
             if let Some(node) = flowchart.nodes.get_mut(&node_id) {
                 match node.node_type.clone() {
-                    NodeType::Producer { 
+                    NodeType::Producer {
                         message_template,
                         start_step,
                         messages_per_cycle,
@@ -94,7 +92,9 @@ impl SimulationEngine {
                             }
                         }
                     }
-                    NodeType::Consumer { consumption_rate: _ } => {
+                    NodeType::Consumer {
+                        consumption_rate: _,
+                    } => {
                         self.process_consumer_node(node);
                     }
                     NodeType::Transformer { script } => {
@@ -111,18 +111,18 @@ impl SimulationEngine {
     }
 
     /// Processes a producer node by potentially generating new messages.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node` - The producer node to process
     /// * `message_template` - The JSON template for messages to produce
     /// * `start_step` - Which step to start producing messages
     /// * `messages_per_cycle` - Total number of messages to generate (not per cycle, but in total)
     /// * `steps_between_cycles` - Number of steps to wait between production cycles
     /// * `current_step` - The current simulation step
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A vector of messages that were generated during this step
     fn process_producer_node(
         &self,
@@ -142,7 +142,10 @@ impl SimulationEngine {
         }
 
         // Get the messages_produced counter from the node
-        let messages_produced = if let NodeType::Producer { messages_produced, .. } = &node.node_type {
+        let messages_produced = if let NodeType::Producer {
+            messages_produced, ..
+        } = &node.node_type
+        {
             *messages_produced
         } else {
             0
@@ -178,7 +181,11 @@ impl SimulationEngine {
             }
 
             // Update the counter in the node
-            if let NodeType::Producer { messages_produced: ref mut counter, .. } = &mut node.node_type {
+            if let NodeType::Producer {
+                messages_produced: ref mut counter,
+                ..
+            } = &mut node.node_type
+            {
                 *counter += to_generate;
             }
         } else {
@@ -189,9 +196,9 @@ impl SimulationEngine {
     }
 
     /// Processes a consumer node by updating its state.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node` - The consumer node to process
     fn process_consumer_node(&self, node: &mut FlowchartNode) {
         // TODO: Implement message consumption logic
@@ -199,9 +206,9 @@ impl SimulationEngine {
     }
 
     /// Processes a transformer node by potentially executing its script.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node` - The transformer node to process
     /// * `script` - The JavaScript script to execute
     fn process_transformer_node(&self, node: &mut FlowchartNode, _script: &String) {
@@ -210,22 +217,27 @@ impl SimulationEngine {
     }
 
     /// Delivers a message to the specified node.
-    /// 
+    ///
     /// This method handles message delivery based on the node type:
     /// - Consumers destroy the message
     /// - Transformers execute JavaScript and forward the result
     /// - Producers ignore incoming messages
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `node_id` - The ID of the destination node
     /// * `message` - The message to deliver
     /// * `flowchart` - The flowchart containing the destination node
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Returns `Ok(())` if the message was delivered successfully, or an error message if JavaScript execution failed.
-    pub fn deliver_message(&mut self, node_id: NodeId, message: Message, flowchart: &mut Flowchart) -> Result<(), String> {
+    pub fn deliver_message(
+        &mut self,
+        node_id: NodeId,
+        message: Message,
+        flowchart: &mut Flowchart,
+    ) -> Result<(), String> {
         if let Some(node) = flowchart.nodes.get_mut(&node_id) {
             match &node.node_type {
                 NodeType::Consumer { .. } => {
@@ -290,19 +302,24 @@ impl SimulationEngine {
 /// // Return transformed message(s)
 /// new_data;
 /// ```
-pub fn execute_transformer_script(script: &str, input_message: &Message) -> Result<Vec<Message>, String> {
-    let mut script_engine = create_script_engine()
-        .map_err(|e| format!("Failed to create script engine: {}", e))?;
+pub fn execute_transformer_script(
+    script: &str,
+    input_message: &Message,
+) -> Result<Vec<Message>, String> {
+    let mut script_engine =
+        create_script_engine().map_err(|e| format!("Failed to create script engine: {}", e))?;
 
     // Create input JSON for the script
     let input_json = serde_json::json!(input_message.data);
 
     // Execute the script to define the transform function
-    script_engine.execute_script(script)
+    script_engine
+        .execute_script(script)
         .map_err(|e| format!("Failed to execute script: {}", e))?;
 
     // Call the transform function with the input
-    let result = script_engine.call_function("transform", input_json)
+    let result = script_engine
+        .call_function("transform", input_json)
         .map_err(|e| format!("Failed to call transform function: {}", e))?;
 
     // Create a new message with the transformed data
@@ -353,7 +370,10 @@ mod tests {
         let transformed_message = &result[0];
 
         // Verify the transformed data contains our expected values
-        assert_eq!(transformed_message.data.get("transformed"), Some(&json!(true)));
+        assert_eq!(
+            transformed_message.data.get("transformed"),
+            Some(&json!(true))
+        );
         assert_eq!(transformed_message.data.get("value"), Some(&json!(42)));
     }
 
@@ -516,8 +536,9 @@ mod tests {
 
         assert!(result.is_err());
         let error_result = result.unwrap_err();
-        assert!(error_result.contains("Function call failed") ||
-            error_result.contains("Test error"));
+        assert!(
+            error_result.contains("Function call failed") || error_result.contains("Test error")
+        );
     }
 
     #[test]
@@ -553,8 +574,9 @@ mod tests {
                             processed: true
                         };
                     }
-                "#.to_string()
-            }
+                "#
+                .to_string(),
+            },
         );
         let transformer_id = transformer.id;
         flowchart.add_node(transformer);
@@ -563,13 +585,17 @@ mod tests {
         let consumer = FlowchartNode::new(
             "Consumer".to_string(),
             (100.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 }
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let consumer_id = consumer.id;
         flowchart.add_node(consumer);
 
         // Connect transformer to consumer
-        flowchart.add_connection(transformer_id, consumer_id).unwrap();
+        flowchart
+            .add_connection(transformer_id, consumer_id)
+            .unwrap();
 
         // Deliver a message to the transformer
         let input_message = Message::new(json!({"x": 5}));
@@ -578,7 +604,9 @@ mod tests {
         assert!(result.is_ok());
 
         // Check that the transformer created a message on the outgoing connection
-        let connection = flowchart.connections.iter()
+        let connection = flowchart
+            .connections
+            .iter()
             .find(|c| c.from == transformer_id)
             .expect("Connection should exist");
 
@@ -604,8 +632,9 @@ mod tests {
                     function transform(input) {
                         return null;
                     }
-                "#.to_string()
-            }
+                "#
+                .to_string(),
+            },
         );
         let transformer_id = transformer.id;
         flowchart.add_node(transformer);

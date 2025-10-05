@@ -4,12 +4,12 @@
 //! current UI state, including canvas navigation, user interactions, context menus,
 //! and file operations.
 
-use crate::types::*;
-use crate::simulation::SimulationEngine;
 use super::undo::UndoHistory;
+use crate::simulation::SimulationEngine;
+use crate::types::*;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// State related to canvas navigation and display.
 ///

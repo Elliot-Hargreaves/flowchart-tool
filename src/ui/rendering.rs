@@ -3,8 +3,8 @@
 //! This module handles all drawing operations including grid background,
 //! connection lines with arrows and messages, and node visualization.
 
-use super::state::FlowchartApp;
 use super::highlighters;
+use super::state::FlowchartApp;
 use crate::types::*;
 use eframe::egui;
 use eframe::epaint::StrokeKind;
@@ -84,7 +84,10 @@ impl FlowchartApp {
 
             if screen_x >= canvas_rect.min.x && screen_x <= canvas_rect.max.x {
                 painter.line_segment(
-                    [egui::pos2(screen_x, canvas_rect.min.y), egui::pos2(screen_x, canvas_rect.max.y)],
+                    [
+                        egui::pos2(screen_x, canvas_rect.min.y),
+                        egui::pos2(screen_x, canvas_rect.max.y),
+                    ],
                     stroke,
                 );
             }
@@ -99,7 +102,10 @@ impl FlowchartApp {
 
             if screen_y >= canvas_rect.min.y && screen_y <= canvas_rect.max.y {
                 painter.line_segment(
-                    [egui::pos2(canvas_rect.min.x, screen_y), egui::pos2(canvas_rect.max.x, screen_y)],
+                    [
+                        egui::pos2(canvas_rect.min.x, screen_y),
+                        egui::pos2(canvas_rect.max.x, screen_y),
+                    ],
                     stroke,
                 );
             }
@@ -115,7 +121,10 @@ impl FlowchartApp {
             let x_axis_screen_y = self.world_to_screen(egui::pos2(0.0, 0.0)).y;
             if x_axis_screen_y >= canvas_rect.min.y && x_axis_screen_y <= canvas_rect.max.y {
                 painter.line_segment(
-                    [egui::pos2(canvas_rect.min.x, x_axis_screen_y), egui::pos2(canvas_rect.max.x, x_axis_screen_y)],
+                    [
+                        egui::pos2(canvas_rect.min.x, x_axis_screen_y),
+                        egui::pos2(canvas_rect.max.x, x_axis_screen_y),
+                    ],
                     axis_stroke,
                 );
             }
@@ -124,7 +133,10 @@ impl FlowchartApp {
             let y_axis_screen_x = self.world_to_screen(egui::pos2(0.0, 0.0)).x;
             if y_axis_screen_x >= canvas_rect.min.x && y_axis_screen_x <= canvas_rect.max.x {
                 painter.line_segment(
-                    [egui::pos2(y_axis_screen_x, canvas_rect.min.y), egui::pos2(y_axis_screen_x, canvas_rect.max.y)],
+                    [
+                        egui::pos2(y_axis_screen_x, canvas_rect.min.y),
+                        egui::pos2(y_axis_screen_x, canvas_rect.max.y),
+                    ],
                     axis_stroke,
                 );
             }
@@ -141,14 +153,25 @@ impl FlowchartApp {
     /// * `painter` - The egui painter for drawing operations
     /// * `connection` - The connection to render
     /// * `is_selected` - Whether this connection is currently selected
-    pub fn draw_connection(&self, painter: &egui::Painter, connection: &Connection, is_selected: bool) {
+    pub fn draw_connection(
+        &self,
+        painter: &egui::Painter,
+        connection: &Connection,
+        is_selected: bool,
+    ) {
         // Get node positions with zoom and canvas offset applied
-        let start_world = self.flowchart.nodes.get(&connection.from)
+        let start_world = self
+            .flowchart
+            .nodes
+            .get(&connection.from)
             .map(|n| egui::pos2(n.position.0, n.position.1))
             .unwrap_or_else(|| egui::pos2(0.0, 0.0));
         let start_pos = self.world_to_screen(start_world);
 
-        let end_world = self.flowchart.nodes.get(&connection.to)
+        let end_world = self
+            .flowchart
+            .nodes
+            .get(&connection.to)
             .map(|n| egui::pos2(n.position.0, n.position.1))
             .unwrap_or_else(|| egui::pos2(100.0, 100.0));
         let end_pos = self.world_to_screen(end_world);
@@ -163,7 +186,7 @@ impl FlowchartApp {
         // Draw the connection line
         painter.line_segment(
             [start_pos, end_pos],
-            egui::Stroke::new(line_width, line_color)
+            egui::Stroke::new(line_width, line_color),
         );
 
         // Draw arrow at the center of the connection
@@ -186,7 +209,13 @@ impl FlowchartApp {
     /// * `start` - Start position of the connection in screen space
     /// * `end` - End position of the connection in screen space
     /// * `color` - Color for the arrow
-    fn draw_arrow_at_center(&self, painter: &egui::Painter, start: egui::Pos2, end: egui::Pos2, color: egui::Color32) {
+    fn draw_arrow_at_center(
+        &self,
+        painter: &egui::Painter,
+        start: egui::Pos2,
+        end: egui::Pos2,
+        color: egui::Color32,
+    ) {
         // Calculate center point
         let center = start + (end - start) * 0.5;
 
@@ -225,7 +254,13 @@ impl FlowchartApp {
     /// * `start` - Start position of the connection in screen space
     /// * `end` - End position of the connection in screen space
     /// * `message_count` - Number of messages to visualize
-    fn draw_message_grid(&self, painter: &egui::Painter, start: egui::Pos2, end: egui::Pos2, message_count: usize) {
+    fn draw_message_grid(
+        &self,
+        painter: &egui::Painter,
+        start: egui::Pos2,
+        end: egui::Pos2,
+        message_count: usize,
+    ) {
         const GRID_WIDTH: usize = 5;
         const DOT_SPACING: f32 = 8.0;
         const DOT_RADIUS: f32 = 3.0;
@@ -248,7 +283,7 @@ impl FlowchartApp {
         let grid_width_pixels = -(GRID_WIDTH as f32) * DOT_SPACING * self.canvas.zoom_factor;
         let grid_height_pixels = (GRID_WIDTH - 1) as f32 * DOT_SPACING * self.canvas.zoom_factor;
 
-        let grid_start = center + grid_offset 
+        let grid_start = center + grid_offset
             - perpendicular * grid_width_pixels * 0.5
             - direction * grid_height_pixels * 0.5;
 
@@ -257,13 +292,17 @@ impl FlowchartApp {
             let row = i / GRID_WIDTH;
             let col = i % GRID_WIDTH;
 
-            let dot_pos = grid_start 
+            let dot_pos = grid_start
                 + perpendicular * (row as f32 * DOT_SPACING * self.canvas.zoom_factor)
                 + direction * (col as f32 * DOT_SPACING * self.canvas.zoom_factor);
 
             let scaled_radius = DOT_RADIUS * self.canvas.zoom_factor;
             painter.circle_filled(dot_pos, scaled_radius, egui::Color32::YELLOW);
-            painter.circle_stroke(dot_pos, scaled_radius, egui::Stroke::new(1.0, egui::Color32::DARK_GRAY));
+            painter.circle_stroke(
+                dot_pos,
+                scaled_radius,
+                egui::Stroke::new(1.0, egui::Color32::DARK_GRAY),
+            );
         }
     }
 
@@ -278,7 +317,12 @@ impl FlowchartApp {
     /// * `painter` - The egui painter for drawing operations
     /// * `from_node_id` - ID of the source node
     /// * `to_screen_pos` - Current mouse position in screen space
-    pub fn draw_connection_preview(&self, painter: &egui::Painter, from_node_id: NodeId, to_screen_pos: egui::Pos2) {
+    pub fn draw_connection_preview(
+        &self,
+        painter: &egui::Painter,
+        from_node_id: NodeId,
+        to_screen_pos: egui::Pos2,
+    ) {
         if let Some(from_node) = self.flowchart.nodes.get(&from_node_id) {
             let from_world = egui::pos2(from_node.position.0, from_node.position.1);
             let from_screen = self.world_to_screen(from_world);
@@ -378,7 +422,12 @@ impl FlowchartApp {
             (egui::Color32::BLACK, 2.0) // Black for normal
         };
 
-        painter.rect_stroke(rect, 5.0, egui::Stroke::new(stroke_width, stroke_color), StrokeKind::Outside);
+        painter.rect_stroke(
+            rect,
+            5.0,
+            egui::Stroke::new(stroke_width, stroke_color),
+            StrokeKind::Outside,
+        );
 
         // Render wrapped node name text
         self.draw_node_text(painter, node, screen_pos, scaled_size);
@@ -395,10 +444,19 @@ impl FlowchartApp {
     /// * `node` - The node whose name to render
     /// * `pos` - Center position of the node in screen space
     /// * `size` - Size of the node in screen space
-    fn draw_node_text(&self, painter: &egui::Painter, node: &FlowchartNode, pos: egui::Pos2, size: egui::Vec2) {
+    fn draw_node_text(
+        &self,
+        painter: &egui::Painter,
+        node: &FlowchartNode,
+        pos: egui::Pos2,
+        size: egui::Vec2,
+    ) {
         let text_rect = egui::Rect::from_center_size(
             egui::pos2(pos.x, pos.y - 5.0 * self.canvas.zoom_factor),
-            egui::vec2(size.x - 10.0 * self.canvas.zoom_factor, size.y - 20.0 * self.canvas.zoom_factor)
+            egui::vec2(
+                size.x - 10.0 * self.canvas.zoom_factor,
+                size.y - 20.0 * self.canvas.zoom_factor,
+            ),
         );
 
         // Create zoom-aware font size
@@ -416,10 +474,7 @@ impl FlowchartApp {
 
         // Draw each line of text
         for (i, line) in wrapped_text.iter().enumerate() {
-            let line_pos = egui::pos2(
-                text_rect.center().x,
-                start_y + i as f32 * line_height
-            );
+            let line_pos = egui::pos2(text_rect.center().x, start_y + i as f32 * line_height);
             painter.text(
                 line_pos,
                 egui::Align2::CENTER_CENTER,
@@ -445,7 +500,13 @@ impl FlowchartApp {
     /// # Returns
     ///
     /// A vector of lines that fit within the maximum width
-    pub fn wrap_text(&self, text: &str, max_width: f32, font_id: &egui::FontId, painter: &egui::Painter) -> Vec<String> {
+    pub fn wrap_text(
+        &self,
+        text: &str,
+        max_width: f32,
+        font_id: &egui::FontId,
+        painter: &egui::Painter,
+    ) -> Vec<String> {
         let mut lines = Vec::new();
         let words: Vec<&str> = text.split_whitespace().collect();
 
@@ -463,7 +524,9 @@ impl FlowchartApp {
             };
 
             let text_width = painter.fonts(|f| {
-                f.layout_no_wrap(test_line.clone(), font_id.clone(), egui::Color32::BLACK).size().x
+                f.layout_no_wrap(test_line.clone(), font_id.clone(), egui::Color32::BLACK)
+                    .size()
+                    .x
             });
 
             if text_width <= max_width {
@@ -498,7 +561,9 @@ impl FlowchartApp {
 /// # Returns
 ///
 /// A closure that can be used as a layouter for egui::TextEdit
-pub fn create_js_layouter(temp_script: &str) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
+pub fn create_js_layouter(
+    temp_script: &str,
+) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
     move |ui: &egui::Ui, _text: &dyn egui::TextBuffer, wrap_width: f32| {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
         let mut layout_job = highlighters::highlight_javascript(temp_script, font_id);
@@ -516,7 +581,9 @@ pub fn create_js_layouter(temp_script: &str) -> impl FnMut(&egui::Ui, &dyn egui:
 /// # Returns
 ///
 /// A closure that can be used as a layouter for egui::TextEdit
-pub fn create_json_layouter(temp_json: &str) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
+pub fn create_json_layouter(
+    temp_json: &str,
+) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
     move |ui: &egui::Ui, _text: &dyn egui::TextBuffer, wrap_width: f32| {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
         let mut layout_job = highlighters::highlight_json(temp_json, font_id);

@@ -5,8 +5,8 @@
 
 use super::state::FlowchartApp;
 use crate::types::*;
-use eframe::egui;
 use crate::ui::UndoAction;
+use eframe::egui;
 
 impl FlowchartApp {
     /// Converts screen coordinates to world coordinates accounting for zoom and pan.
@@ -65,8 +65,9 @@ impl FlowchartApp {
     pub fn handle_canvas_panning(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
         // Check for middle mouse button OR Cmd/Ctrl+left mouse button
         // modifiers.command automatically uses Cmd on macOS and Ctrl elsewhere
-        let should_pan = ui.input(|i| i.pointer.middle_down() || 
-                                      (i.pointer.primary_down() && i.modifiers.command));
+        let should_pan = ui.input(|i| {
+            i.pointer.middle_down() || (i.pointer.primary_down() && i.modifiers.command)
+        });
 
         if should_pan {
             if let Some(current_pos) = response.interact_pointer_pos() {
@@ -99,7 +100,8 @@ impl FlowchartApp {
 
         if scroll_delta != 0.0 {
             // Use hover position if available, otherwise use response position
-            let mouse_pos = ui.input(|i| i.pointer.hover_pos())
+            let mouse_pos = ui
+                .input(|i| i.pointer.hover_pos())
                 .or_else(|| response.interact_pointer_pos());
 
             if let Some(mouse_pos) = mouse_pos {
@@ -140,7 +142,9 @@ impl FlowchartApp {
                 let shift_held = ui.input(|i| i.modifiers.shift);
 
                 // Check if we're starting a new interaction
-                if self.interaction.dragging_node.is_none() && self.interaction.drawing_connection_from.is_none() {
+                if self.interaction.dragging_node.is_none()
+                    && self.interaction.drawing_connection_from.is_none()
+                {
                     // Check if clicking on a node
                     if let Some(node_id) = self.find_node_at_position(world_pos) {
                         if shift_held {
@@ -171,7 +175,10 @@ impl FlowchartApp {
             }
 
             // Record undo for node movement when drag ends
-            if let (Some(node_id), Some(old_pos)) = (self.interaction.dragging_node, self.interaction.drag_original_position) {
+            if let (Some(node_id), Some(old_pos)) = (
+                self.interaction.dragging_node,
+                self.interaction.drag_original_position,
+            ) {
                 self.record_node_movement(node_id, old_pos);
             }
 
@@ -216,7 +223,12 @@ impl FlowchartApp {
     /// * `node_id` - ID of the node being dragged
     /// * `world_pos` - Current mouse position in world space
     /// * `ui` - The egui UI context for checking modifiers
-    fn update_dragged_node_position(&mut self, node_id: NodeId, world_pos: egui::Pos2, ui: &egui::Ui) {
+    fn update_dragged_node_position(
+        &mut self,
+        node_id: NodeId,
+        world_pos: egui::Pos2,
+        ui: &egui::Ui,
+    ) {
         let mut new_world_pos = world_pos + self.interaction.node_drag_offset;
 
         // Check if Shift is held for grid snapping
@@ -283,9 +295,11 @@ impl FlowchartApp {
                         }
 
                         // Check if connection already exists
-                        let connection_exists = self.flowchart.connections.iter().any(|c| {
-                            c.from == from_node_id && c.to == to_node_id
-                        });
+                        let connection_exists = self
+                            .flowchart
+                            .connections
+                            .iter()
+                            .any(|c| c.from == from_node_id && c.to == to_node_id);
 
                         if !connection_exists {
                             // Create new connection
@@ -293,10 +307,11 @@ impl FlowchartApp {
                             self.flowchart.connections.push(connection);
 
                             // Record undo action for connection creation
-                            self.undo_history.push_action(UndoAction::ConnectionCreated {
-                                from: from_node_id,
-                                to: to_node_id,
-                            });
+                            self.undo_history
+                                .push_action(UndoAction::ConnectionCreated {
+                                    from: from_node_id,
+                                    to: to_node_id,
+                                });
 
                             self.file.has_unsaved_changes = true;
                         }
@@ -376,7 +391,12 @@ impl FlowchartApp {
     /// # Returns
     ///
     /// The minimum distance from the point to the line segment
-    fn point_to_line_distance(&self, point: egui::Pos2, line_start: egui::Pos2, line_end: egui::Pos2) -> f32 {
+    fn point_to_line_distance(
+        &self,
+        point: egui::Pos2,
+        line_start: egui::Pos2,
+        line_end: egui::Pos2,
+    ) -> f32 {
         let line_vec = line_end - line_start;
         let point_vec = point - line_start;
         let line_len_sq = line_vec.length_sq();
