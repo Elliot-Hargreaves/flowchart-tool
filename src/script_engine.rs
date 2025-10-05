@@ -243,6 +243,269 @@ impl JavaScriptEngine {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::simulation::execute_transformer_script;
+    use crate::types::Message;
+    use serde_json::{json, Number, Value};
+
+    #[test]
+    fn test_execute_script_simple_transform() {
+        let script = r#"
+            function transform(input) {
+                input.value = input.value * 2;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"value": 21}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["value"], 42);
+    }
+
+    #[test]
+    fn test_execute_script_add_field() {
+        let script = r#"
+            function transform(input) {
+                input.newField = 'added';
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"existingField": "original"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["existingField"], "original");
+        assert_eq!(output["newField"], "added");
+    }
+
+    #[test]
+    fn test_execute_script_string_manipulation() {
+        let script = r#"
+            function transform(input) {
+                input.text = input.text.toUpperCase();
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"text": "hello world"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["text"], "HELLO WORLD");
+    }
+
+    #[test]
+    fn test_execute_script_nested_object() {
+        let script = r#"
+            function transform(input) {
+                input.nested.value = input.nested.value + 10;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"nested": {"value": 5}}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["nested"]["value"], 15);
+    }
+
+    #[test]
+    fn test_execute_script_array_operation() {
+        let script = r#"
+            function transform(input) {
+                input.items.push('new');
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"items": ["a", "b"]}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["items"].as_array().unwrap().len(), 3);
+        assert_eq!(output["items"][2], "new");
+    }
+
+    #[test]
+    fn test_execute_script_conditional_logic() {
+        let script = r#"
+            function transform(input) {
+                if (input.value > 10) {
+                    input.result = 'high';
+                } else {
+                    input.result = 'low';
+                }
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"value": 15}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["result"], "high");
+    }
+
+    #[test]
+    fn test_execute_script_math_operations() {
+        let script = r#"
+            function transform(input) {
+                input.sum = input.a + input.b;
+                input.product = input.a * input.b;
+                input.average = (input.a + input.b) / 2;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"a": 10, "b": 20}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["sum"], 30);
+        assert_eq!(output["product"], 200);
+        assert_eq!(output["average"], 15);
+    }
+
+    #[test]
+    fn test_execute_script_returns_original_on_syntax_error() {
+        let script = "this is not valid javascript syntax {{{";
+        let input = Message::new(json!({"value": 42}));
+        let result = execute_transformer_script(script, &input);
+
+        // Should return error on syntax error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_script_returns_original_on_runtime_error() {
+        let script = r#"
+            function transform(input) {
+                input.value = undefined.property;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"value": 42}));
+        let result = execute_transformer_script(script, &input);
+
+        // Should return error on runtime error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_script_empty_script() {
+        let script = "";
+        let input = Message::new(json!({"value": 42}));
+        let result = execute_transformer_script(script, &input);
+
+        // Empty script should return error (no transform function defined)
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_script_delete_field() {
+        let script = r#"
+            function transform(input) {
+                delete input.toDelete;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"keep": "this", "toDelete": "remove"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert!(output.get("keep").is_some());
+        assert!(output.get("toDelete").is_none());
+    }
+
+    #[test]
+    fn test_execute_script_boolean_operations() {
+        let script = r#"
+            function transform(input) {
+                input.isValid = input.value > 0 && input.value < 100;
+                input.hasError = !input.success;
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"value": 50, "success": true}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["isValid"], true);
+        assert_eq!(output["hasError"], false);
+    }
+
+    #[test]
+    fn test_execute_script_type_conversion() {
+        let script = r#"
+            function transform(input) {
+                input.stringValue = String(input.number);
+                input.numberValue = Number(input.string);
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"number": 42, "string": "123"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["stringValue"], "42");
+        assert_eq!(output["numberValue"], Value::Number(Number::from_f64(123.0).unwrap()));
+    }
+
+    #[test]
+    fn test_execute_script_loop_operation() {
+        let script = r#"
+            function transform(input) {
+                input.total = 0;
+                for (var i = 0; i < input.values.length; i++) {
+                    input.total += input.values[i];
+                }
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"values": [1, 2, 3, 4, 5]}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["total"], 15);
+    }
+
+    #[test]
+    fn test_execute_script_object_creation() {
+        let script = r#"
+            function transform(input) {
+                input.metadata = {
+                    timestamp: Date.now(),
+                    processed: true,
+                    version: 1
+                };
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"data": "test"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert!(output["metadata"].is_object());
+        assert_eq!(output["metadata"]["processed"], true);
+        assert_eq!(output["metadata"]["version"], 1);
+    }
+
+    #[test]
+    fn test_execute_script_json_with_special_characters() {
+        let script = r#"
+            function transform(input) {
+                input.value = 'test';
+                return input;
+            }
+        "#;
+        let input = Message::new(json!({"text": "Quote: \" Backslash: \\ Newline: \n"}));
+        let result = execute_transformer_script(script, &input).unwrap();
+        let output = &result[0].data;
+
+        assert_eq!(output["value"], "test");
+        // Original text should be preserved
+        assert!(output["text"].is_string());
+    }
+}
+
 /// Create a JavaScript script engine
 pub fn create_script_engine() -> Result<JavaScriptEngine, String> {
     JavaScriptEngine::new()

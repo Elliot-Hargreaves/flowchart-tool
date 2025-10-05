@@ -105,7 +105,12 @@ impl UndoHistory {
     ///
     /// The action to undo, or None if the undo stack is empty
     pub fn pop_undo(&mut self) -> Option<UndoAction> {
-        self.undo_stack.pop()
+        if let Some(action) = self.undo_stack.pop() {
+            self.redo_stack.push(action.clone());
+            Some(action)
+        } else {
+            None
+        }
     }
 
     /// Pops the most recent action from the redo stack.
@@ -114,7 +119,12 @@ impl UndoHistory {
     ///
     /// The action to redo, or None if the redo stack is empty
     pub fn pop_redo(&mut self) -> Option<UndoAction> {
-        self.redo_stack.pop()
+        if let Some(action) = self.redo_stack.pop() {
+            self.undo_stack.push(action.clone());
+            Some(action)
+        } else {
+            None
+        }
     }
 
     /// Pushes an action onto the redo stack.
@@ -130,6 +140,280 @@ impl UndoHistory {
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+    use crate::types::NodeType;
+
+    #[test]
+    fn test_undo_history_new() {
+        let history = UndoHistory::new();
+        assert!(!history.can_undo());
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn test_push_action_node_created() {
+        let mut history = UndoHistory::new();
+        let node_id = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id });
+
+        assert!(history.can_undo());
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn test_push_action_clears_redo_stack() {
+        let mut history = UndoHistory::new();
+        let node_id1 = Uuid::new_v4();
+        let node_id2 = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id: node_id1 });
+        history.pop_undo();
+        assert!(history.can_redo());
+
+        history.push_action(UndoAction::NodeCreated { node_id: node_id2 });
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn test_pop_undo() {
+        let mut history = UndoHistory::new();
+        let node_id = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id });
+
+        let action = history.pop_undo();
+        assert!(action.is_some());
+
+        if let Some(UndoAction::NodeCreated { node_id: id }) = action {
+            assert_eq!(id, node_id);
+        } else {
+            panic!("Expected NodeCreated action");
+        }
+
+        assert!(!history.can_undo());
+        assert!(history.can_redo());
+    }
+
+    #[test]
+    fn test_pop_undo_empty() {
+        let mut history = UndoHistory::new();
+        let action = history.pop_undo();
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_pop_redo() {
+        let mut history = UndoHistory::new();
+        let node_id = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id });
+        history.pop_undo();
+
+        let action = history.pop_redo();
+        assert!(action.is_some());
+
+        if let Some(UndoAction::NodeCreated { node_id: id }) = action {
+            assert_eq!(id, node_id);
+        } else {
+            panic!("Expected NodeCreated action");
+        }
+
+        assert!(history.can_undo());
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn test_pop_redo_empty() {
+        let mut history = UndoHistory::new();
+        let action = history.pop_redo();
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_multiple_undo_redo() {
+        let mut history = UndoHistory::new();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let id3 = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id: id1 });
+        history.push_action(UndoAction::NodeCreated { node_id: id2 });
+        history.push_action(UndoAction::NodeCreated { node_id: id3 });
+
+        assert!(history.can_undo());
+        history.pop_undo();
+        history.pop_undo();
+        assert!(history.can_undo());
+        assert!(history.can_redo());
+
+        history.pop_redo();
+        assert!(history.can_redo());
+    }
+
+    #[test]
+    fn test_node_moved_action() {
+        let mut history = UndoHistory::new();
+        let node_id = Uuid::new_v4();
+        let old_pos = (10.0, 20.0);
+        let new_pos = (50.0, 60.0);
+
+        history.push_action(UndoAction::NodeMoved {
+            node_id,
+            old_position: old_pos,
+            new_position: new_pos,
+        });
+
+        let action = history.pop_undo().unwrap();
+        if let UndoAction::NodeMoved { node_id: id, old_position, new_position } = action {
+            assert_eq!(id, node_id);
+            assert_eq!(old_position, old_pos);
+            assert_eq!(new_position, new_pos);
+        } else {
+            panic!("Expected NodeMoved action");
+        }
+    }
+
+    #[test]
+    fn test_connection_created_action() {
+        let mut history = UndoHistory::new();
+        let from = Uuid::new_v4();
+        let to = Uuid::new_v4();
+
+        history.push_action(UndoAction::ConnectionCreated { from, to });
+
+        let action = history.pop_undo().unwrap();
+        if let UndoAction::ConnectionCreated { from: f, to: t } = action {
+            assert_eq!(f, from);
+            assert_eq!(t, to);
+        } else {
+            panic!("Expected ConnectionCreated action");
+        }
+    }
+
+    #[test]
+    fn test_connection_deleted_action() {
+        let mut history = UndoHistory::new();
+        let from_id = Uuid::new_v4();
+        let to_id = Uuid::new_v4();
+        let connection = Connection::new(from_id, to_id);
+
+        history.push_action(UndoAction::ConnectionDeleted { 
+            connection: connection.clone(), 
+            index: 0 
+        });
+
+        let action = history.pop_undo().unwrap();
+        if let UndoAction::ConnectionDeleted { connection: c, index } = action {
+            assert_eq!(c.from, from_id);
+            assert_eq!(c.to, to_id);
+            assert_eq!(index, 0);
+        } else {
+            panic!("Expected ConnectionDeleted action");
+        }
+    }
+
+    #[test]
+    fn test_node_deleted_action() {
+        let mut history = UndoHistory::new();
+        let node = FlowchartNode::new(
+            "Test Node".to_string(),
+            (100.0, 200.0),
+            NodeType::Consumer { consumption_rate: 5 },
+        );
+        let node_id = node.id;
+
+        history.push_action(UndoAction::NodeDeleted {
+            node: node.clone(),
+            connections: vec![],
+        });
+
+        let action = history.pop_undo().unwrap();
+        if let UndoAction::NodeDeleted { node, connections } = action {
+            assert_eq!(node.id, node_id);
+            assert_eq!(node.name, "Test Node");
+            assert_eq!(node.position, (100.0, 200.0));
+            assert!(connections.is_empty());
+        } else {
+            panic!("Expected NodeDeleted action");
+        }
+    }
+
+    #[test]
+    fn test_clear_history() {
+        let mut history = UndoHistory::new();
+        let node_id = Uuid::new_v4();
+
+        history.push_action(UndoAction::NodeCreated { node_id });
+        history.pop_undo();
+
+        assert!(history.can_redo());
+
+        history.clear();
+
+        assert!(!history.can_undo());
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn test_max_history_limit() {
+        let mut history = UndoHistory::new();
+
+        // Push more actions than max_history (100)
+        for _i in 0..150 {
+            let node_id = Uuid::new_v4();
+            history.push_action(UndoAction::NodeCreated { node_id });
+        }
+
+        // Count how many we can undo
+        let mut count = 0;
+        while history.can_undo() {
+            history.pop_undo();
+            count += 1;
+        }
+
+        assert_eq!(count, 100);
+    }
+
+    #[test]
+    fn test_undo_redo_sequence() {
+        let mut history = UndoHistory::new();
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+
+        // Add two actions
+        history.push_action(UndoAction::NodeCreated { node_id: id1 });
+        history.push_action(UndoAction::NodeCreated { node_id: id2 });
+
+        // Undo twice
+        let action2 = history.pop_undo().unwrap();
+        let action1 = history.pop_undo().unwrap();
+
+        // Verify order
+        if let UndoAction::NodeCreated { node_id } = action2 {
+            assert_eq!(node_id, id2);
+        }
+        if let UndoAction::NodeCreated { node_id } = action1 {
+            assert_eq!(node_id, id1);
+        }
+
+        // Redo twice
+        let redo1 = history.pop_redo().unwrap();
+        let redo2 = history.pop_redo().unwrap();
+
+        // Verify order
+        if let UndoAction::NodeCreated { node_id } = redo1 {
+            assert_eq!(node_id, id1);
+        }
+        if let UndoAction::NodeCreated { node_id } = redo2 {
+            assert_eq!(node_id, id2);
+        }
     }
 }
 
