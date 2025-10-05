@@ -1,0 +1,776 @@
+//! User interface components and rendering logic for the flowchart tool.
+//! 
+//! This module contains all the UI-related code including the main application struct,
+//! canvas rendering, property panels, context menus, and user interaction handling.
+//!
+//! # Module Organization
+//!
+//! - `highlighters` - Syntax highlighting for JavaScript and JSON
+//! - `state` - Application state structures and the main FlowchartApp
+//! - `file_ops` - File save/load operations for native and WASM
+//! - `canvas` - Canvas navigation, zooming, panning, and interaction
+//! - `rendering` - Drawing nodes, connections, grid, and UI elements
+
+mod highlighters;
+mod state;
+mod file_ops;
+mod canvas;
+mod rendering;
+
+pub use state::FlowchartApp;
+
+use crate::types::*;
+use crate::simulation::SimulationEngine;
+use eframe::egui;
+use egui::TextBuffer;
+
+impl eframe::App for FlowchartApp {
+    /// Main update function called by egui for each frame.
+    ///
+    /// This method handles the overall UI layout, including the properties panel,
+    /// toolbar, and main canvas area. It also processes simulation steps when running.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The egui context
+    /// * `_frame` - The eframe frame (unused)
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Handle pending file operations
+        self.handle_pending_operations(ctx);
+
+        // Handle delete key for removing selected objects
+        self.handle_delete_key(ctx);
+
+        // Properties panel on the right side
+        egui::SidePanel::right("properties_panel")
+            .resizable(true)
+            .default_width(200.0)
+            .show(ctx, |ui| {
+                self.draw_properties_panel(ui);
+            });
+
+        // Main content area
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical(|ui| {
+                // Toolbar at the top
+                self.draw_toolbar(ui);
+                ui.separator();
+
+                // Canvas takes remaining space
+                self.draw_canvas(ui);
+            });
+        });
+
+        // Process simulation if running
+        if self.is_simulation_running {
+            let delivered_messages = self.simulation_engine.step(&mut self.flowchart);
+
+            // Handle delivered messages
+            for (node_id, message) in delivered_messages {
+                match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
+                    Ok(_) => {},
+                    Err(error_msg) => {
+                        // Stop simulation on error
+                        self.is_simulation_running = false;
+                        self.flowchart.simulation_state = SimulationState::Stopped;
+                        self.error_node = Some(node_id);
+                        eprintln!("Simulation stopped due to error in node {}: {}", node_id, error_msg);
+                    }
+                }
+            }
+
+            self.frame_counter += 1;
+            ctx.request_repaint(); // Keep animating
+        } else if self.error_node.is_some() {
+            // Keep repainting to show flashing error border
+            self.frame_counter += 1;
+            ctx.request_repaint();
+        }
+    }
+}
+
+impl FlowchartApp {
+    /// Handles delete key presses to remove selected nodes or connections.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The egui context for checking input
+    fn handle_delete_key(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+            if let Some(selected_node) = self.interaction.selected_node {
+                // Remove the selected node
+                self.flowchart.nodes.remove(&selected_node);
+
+                // Remove all connections involving this node
+                self.flowchart.connections.retain(|c| c.from != selected_node && c.to != selected_node);
+
+                // Clear selection
+                self.interaction.selected_node = None;
+                self.interaction.editing_node_name = None;
+                self.file.has_unsaved_changes = true;
+            } else if let Some(conn_idx) = self.interaction.selected_connection {
+                // Remove the selected connection
+                if conn_idx < self.flowchart.connections.len() {
+                    self.flowchart.connections.remove(conn_idx);
+                    self.interaction.selected_connection = None;
+                    self.file.has_unsaved_changes = true;
+                }
+            }
+        }
+    }
+
+    /// Renders the toolbar with file operations, simulation controls, and view options.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            // File operations
+            if ui.button("New").clicked() {
+                self.new_flowchart();
+            }
+            if ui.button("Open").clicked() {
+                self.load_flowchart();
+            }
+            if ui.button("Save").clicked() {
+                self.save_flowchart();
+            }
+            if ui.button("Save As").clicked() {
+                self.save_as_flowchart();
+            }
+
+            ui.separator();
+
+            // Simulation controls
+            if self.is_simulation_running {
+                if ui.button("Pause").clicked() {
+                    self.is_simulation_running = false;
+                    self.flowchart.simulation_state = SimulationState::Paused;
+                }
+            } else if ui.button("Start").clicked() {
+                self.is_simulation_running = true;
+                self.flowchart.simulation_state = SimulationState::Running;
+            }
+            if ui.button("Stop").clicked() {
+                self.is_simulation_running = false;
+                self.flowchart.simulation_state = SimulationState::Stopped;
+                self.flowchart.current_step = 0;
+                self.error_node = None;
+                // Clear all messages from connections
+                for connection in &mut self.flowchart.connections {
+                    connection.messages.clear();
+                }
+                // Reset producer counters and node states
+                for node in self.flowchart.nodes.values_mut() {
+                    node.state = NodeState::Idle;
+                    if let NodeType::Producer { messages_produced, .. } = &mut node.node_type {
+                        *messages_produced = 0;
+                    }
+                }
+            }
+            if ui.button("Step").clicked() {
+                let delivered_messages = self.simulation_engine.step(&mut self.flowchart);
+                for (node_id, message) in delivered_messages {
+                    match self.simulation_engine.deliver_message(node_id, message, &mut self.flowchart) {
+                        Ok(_) => {},
+                        Err(error_msg) => {
+                            self.error_node = Some(node_id);
+                            eprintln!("Error in node {}: {}", node_id, error_msg);
+                        }
+                    }
+                }
+            }
+
+            ui.separator();
+
+            // View options
+            ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
+
+            ui.separator();
+
+            // Show current simulation step
+            ui.label(format!("Step: {}", self.flowchart.current_step));
+
+            // Show current file and unsaved changes indicator
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(file_path) = &self.file.current_path {
+                    let status = if self.file.has_unsaved_changes { "*" } else { "" };
+                    ui.label(format!("{}{}", file_path, status));
+                } else {
+                    let status = if self.file.has_unsaved_changes { "Untitled*" } else { "Untitled" };
+                    ui.label(status);
+                }
+
+                ui.label(format!("Zoom: {:.0}%", self.canvas.zoom_factor * 100.0));
+            });
+        });
+    }
+
+    /// Renders the properties panel showing details of the selected node or connection.
+    ///
+    /// The panel displays node/connection information and allows editing of properties
+    /// including name, type-specific settings, and current state.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    fn draw_properties_panel(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.heading("Properties");
+            ui.separator();
+
+            if let Some(selected_id) = self.interaction.selected_node {
+                if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
+                    ui.label("Type: Node");
+                    ui.separator();
+
+                    // Node name editing
+                    ui.label("Name:");
+                    if self.interaction.editing_node_name == Some(selected_id) {
+                        self.draw_name_editor(ui, selected_id);
+                    } else {
+                        if ui.button(&node.name).clicked() {
+                            self.start_editing_node_name(selected_id, &node.name);
+                        }
+                    }
+
+                    ui.separator();
+
+                    // Node type display (now mutable)
+                    self.draw_node_type_info(ui, &node);
+
+                    ui.separator();
+
+                    // Node state and position
+                    self.draw_node_status_info(ui, &node);
+                } else {
+                    ui.label("Node not found");
+                }
+            } else if let Some(conn_idx) = self.interaction.selected_connection {
+                if let Some(connection) = self.flowchart.connections.get(conn_idx) {
+                    self.draw_connection_properties(ui, connection);
+                } else {
+                    ui.label("Connection not found");
+                }
+            } else {
+                self.draw_no_selection_info(ui);
+            }
+        });
+    }
+
+    /// Renders connection properties in the properties panel.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `connection` - The connection to display properties for
+    fn draw_connection_properties(&self, ui: &mut egui::Ui, connection: &Connection) {
+        ui.label("Type: Connection");
+        ui.separator();
+
+        // Show from and to node names
+        if let Some(from_node) = self.flowchart.nodes.get(&connection.from) {
+            ui.label(format!("From: {}", from_node.name));
+        } else {
+            ui.label("From: (node not found)");
+        }
+
+        if let Some(to_node) = self.flowchart.nodes.get(&connection.to) {
+            ui.label(format!("To: {}", to_node.name));
+        } else {
+            ui.label("To: (node not found)");
+        }
+
+        ui.separator();
+        ui.label(format!("Messages in transit: {}", connection.messages.len()));
+
+        // Show message contents
+        if !connection.messages.is_empty() {
+            ui.separator();
+            ui.label("Message Contents:");
+
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for (idx, message) in connection.messages.iter().enumerate() {
+                        ui.push_id(idx, |ui| {
+                            egui::CollapsingHeader::new(format!("Message {}", idx + 1))
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    // Display message as formatted JSON
+                                    let json_str = serde_json::to_string_pretty(&message.data)
+                                        .unwrap_or_else(|_| format!("{:?}", message.data));
+
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut json_str.as_str())
+                                            .desired_rows(5)
+                                            .desired_width(f32::INFINITY)
+                                            .code_editor()
+                                            .interactive(false)
+                                    );
+                                });
+                        });
+                    }
+                });
+        }
+
+        ui.separator();
+        ui.colored_label(egui::Color32::GRAY, "Press Delete to remove");
+    }
+
+    /// Renders the name editing field for a node.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `selected_id` - ID of the node being edited
+    fn draw_name_editor(&mut self, ui: &mut egui::Ui, selected_id: NodeId) {
+        let response = ui.text_edit_singleline(&mut self.interaction.temp_node_name);
+
+        // Auto-focus the text field
+        response.request_focus();
+
+        // Select all text when flag is set and field has focus
+        if self.interaction.should_select_text && response.has_focus() {
+            self.interaction.should_select_text = false;
+            self.select_all_text_in_field(ui, response.id);
+        }
+
+        // Handle Enter key to save changes
+        if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.save_node_name_change(selected_id);
+        } else if response.lost_focus() {
+            // Cancel editing if focus lost without Enter
+            self.interaction.editing_node_name = None;
+        }
+    }
+
+    /// Selects all text in a text edit field using egui's internal state.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `field_id` - The ID of the text field
+    fn select_all_text_in_field(&self, ui: &mut egui::Ui, field_id: egui::Id) {
+        ui.memory_mut(|mem| {
+            let state = mem.data.get_temp_mut_or_default::<egui::text_edit::TextEditState>(field_id);
+            let text_len = self.interaction.temp_node_name.len();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(text_len),
+            )));
+        });
+    }
+
+    /// Starts editing the name of the specified node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to edit
+    /// * `current_name` - Current name of the node
+    fn start_editing_node_name(&mut self, node_id: NodeId, current_name: &str) {
+        self.interaction.editing_node_name = Some(node_id);
+        self.interaction.temp_node_name = current_name.to_string();
+        self.interaction.should_select_text = true;
+    }
+
+    /// Saves the current name edit to the selected node.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to update
+    fn save_node_name_change(&mut self, node_id: NodeId) {
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            node.name = self.interaction.temp_node_name.clone();
+            self.file.has_unsaved_changes = true;
+        }
+        self.interaction.editing_node_name = None;
+    }
+
+    /// Updates a producer node property from the temporary editing values.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to update
+    /// * `property` - Name of the property to update
+    fn update_producer_property(&mut self, node_id: NodeId, property: &str) {
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            if let NodeType::Producer { 
+                ref mut message_template,
+                ref mut start_step,
+                ref mut messages_per_cycle,
+                ref mut steps_between_cycles,
+                messages_produced: _
+            } = node.node_type {
+                match property {
+                    "start_step" => {
+                        if let Ok(value) = self.interaction.temp_producer_start_step.parse::<u64>() {
+                            *start_step = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "messages_per_cycle" => {
+                        if let Ok(value) = self.interaction.temp_producer_messages_per_cycle.parse::<u32>() {
+                            *messages_per_cycle = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "steps_between_cycles" => {
+                        if let Ok(value) = self.interaction.temp_producer_steps_between.parse::<u32>() {
+                            *steps_between_cycles = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "message_template" => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(
+                            &self.interaction.temp_producer_message_template
+                        ) {
+                            *message_template = value;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Updates a transformer node property from the temporary editing values.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to update
+    /// * `property` - Name of the property to update
+    fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            if let NodeType::Transformer { ref mut script } = node.node_type {
+                if property == "script" {
+                    // Replace tabs with spaces to keep whitespace consistent
+                    *script = self.interaction.temp_transformer_script.replace("\t", "    ");
+                    self.file.has_unsaved_changes = true;
+                }
+            }
+        }
+    }
+
+    /// Renders node type information and type-specific properties.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `node` - The node to display information for
+    fn draw_node_type_info(&mut self, ui: &mut egui::Ui, node: &FlowchartNode) {
+        ui.label(format!("Type: {}", match &node.node_type {
+            NodeType::Producer { .. } => "Producer",
+            NodeType::Consumer { .. } => "Consumer",
+            NodeType::Transformer { .. } => "Transformer",
+        }));
+
+        // Type-specific properties
+        match &node.node_type {
+            NodeType::Producer { 
+                message_template,
+                start_step,
+                messages_per_cycle,
+                steps_between_cycles,
+                messages_produced,
+            } => {
+                // Initialize temp values if empty
+                if self.interaction.temp_producer_start_step.is_empty() {
+                    self.interaction.temp_producer_start_step = start_step.to_string();
+                }
+                if self.interaction.temp_producer_messages_per_cycle.is_empty() {
+                    self.interaction.temp_producer_messages_per_cycle = messages_per_cycle.to_string();
+                }
+                if self.interaction.temp_producer_steps_between.is_empty() {
+                    self.interaction.temp_producer_steps_between = steps_between_cycles.to_string();
+                }
+                if self.interaction.temp_producer_message_template.is_empty() {
+                    self.interaction.temp_producer_message_template = 
+                        serde_json::to_string_pretty(message_template)
+                            .unwrap_or_else(|_| "{}".to_string());
+                }
+
+                ui.label("Start Step:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_start_step).changed() {
+                    self.update_producer_property(node.id, "start_step");
+                }
+
+                ui.label("Total Messages:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_messages_per_cycle).changed() {
+                    self.update_producer_property(node.id, "messages_per_cycle");
+                }
+
+                ui.label(format!("Messages Produced: {}/{}", messages_produced, messages_per_cycle));
+
+                ui.label("Steps Between Cycles:");
+                if ui.text_edit_singleline(&mut self.interaction.temp_producer_steps_between).changed() {
+                    self.update_producer_property(node.id, "steps_between_cycles");
+                }
+
+                ui.separator();
+                ui.label("Message Template (JSON):");
+
+                // Store a reference for the layouter and a mutable copy for editing
+                let layouter_ref = self.interaction.temp_producer_message_template.clone();
+                let mut layouter = rendering::create_json_layouter(&layouter_ref);
+
+                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_producer_message_template)
+                    .desired_rows(5)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .lock_focus(true)
+                    .layouter(&mut layouter));
+
+                // Handle Tab key to insert 4 spaces
+                if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+                    // Get cursor position from text edit state
+                    let cursor_pos = ui.memory(|mem| {
+                        mem.data.get_temp::<egui::text_edit::TextEditState>(text_edit_response.id)
+                            .and_then(|state| state.cursor.char_range())
+                            .map(|range| range.primary.index)
+                    }).unwrap_or(self.interaction.temp_producer_message_template.len());
+
+                    self.interaction.temp_producer_message_template.insert_str(cursor_pos, "    ");
+                    self.update_producer_property(node.id, "message_template");
+                } else if text_edit_response.changed() {
+                    self.update_producer_property(node.id, "message_template");
+                }
+            }
+            NodeType::Consumer { consumption_rate } => {
+                ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
+            }
+            NodeType::Transformer { script } => {
+                // Initialize temp value if empty
+                if self.interaction.temp_transformer_script.is_empty() {
+                    self.interaction.temp_transformer_script = script.clone();
+                }
+
+                ui.label("JavaScript Script:");
+
+                // Store a reference for the layouter and a mutable copy for editing
+                let layouter_ref = self.interaction.temp_transformer_script.clone();
+                let mut layouter = rendering::create_js_layouter(&layouter_ref);
+
+                let text_edit_response = ui.add(egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
+                    .desired_rows(10)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .lock_focus(true)
+                    .layouter(&mut layouter));
+
+                if text_edit_response.changed() {
+                    self.update_transformer_property(node.id, "script");
+                }
+            }
+        }
+    }
+
+    /// Renders node status information including state and position.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `node` - The node to display status for
+    fn draw_node_status_info(&self, ui: &mut egui::Ui, node: &FlowchartNode) {
+        ui.label(format!("State: {:?}", node.state));
+        ui.label(format!("Position: ({:.1}, {:.1})", node.position.0, node.position.1));
+    }
+
+    /// Renders information shown when no node is selected.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    fn draw_no_selection_info(&self, ui: &mut egui::Ui) {
+        ui.label("No node selected");
+        ui.separator();
+        ui.label("Left-click on a node to select it");
+        ui.label("Right-click on canvas to create nodes");
+        ui.label("Middle-click and drag to pan");
+    }
+
+    /// Renders the right-click context menu for creating nodes.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    fn draw_context_menu(&mut self, ui: &mut egui::Ui) {
+        // Use the stored screen coordinates for menu positioning
+        let screen_pos = egui::pos2(self.context_menu.screen_pos.0, self.context_menu.screen_pos.1);
+
+        let area_response = egui::Area::new(egui::Id::new("context_menu"))
+            .fixed_pos(screen_pos)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("Create Node:");
+                        ui.separator();
+
+                        if ui.button("Producer").clicked() {
+                            self.create_node_at_pos(NodeType::Producer {
+                                message_template: serde_json::json!({"value": 0}),
+                                start_step: 0,
+                                messages_per_cycle: 1,
+                                steps_between_cycles: 1,
+                                messages_produced: 0,
+                            });
+                            self.context_menu.show = false;
+                        }
+
+                        if ui.button("Consumer").clicked() {
+                            self.create_node_at_pos(NodeType::Consumer { consumption_rate: 1 });
+                            self.context_menu.show = false;
+                        }
+
+                        if ui.button("Transformer").clicked() {
+                            self.create_node_at_pos(NodeType::Transformer {
+                                script: "// Transform the input message\nfunction transform(input) {\n    //Just forward it on.\n    return input;\n}".to_string()
+                            });
+                            self.context_menu.show = false;
+                        }
+
+                        ui.separator();
+                        if ui.button("Cancel").clicked() {
+                            self.context_menu.show = false;
+                        }
+                    });
+                })
+            });
+
+        // Handle click-outside-to-close after the first frame
+        if !self.context_menu.just_opened
+            && ui.input(|i| i.pointer.primary_clicked()) {
+                if let Some(click_pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    if !area_response.response.rect.contains(click_pos) {
+                        self.context_menu.show = false;
+                    }
+                }
+            }
+
+        self.context_menu.just_opened = false;
+    }
+
+    /// Creates a new node at the context menu position.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_type` - The type of node to create
+    fn create_node_at_pos(&mut self, node_type: NodeType) {
+        self.node_counter += 1;
+
+        let new_node = FlowchartNode::new(
+            format!("node{}", self.node_counter),
+            self.context_menu.world_pos,
+            node_type,
+        );
+
+        let node_id = new_node.id;
+        self.flowchart.add_node(new_node);
+
+        // Select the new node and start editing its name immediately
+        self.interaction.selected_node = Some(node_id);
+        self.start_editing_node_name(node_id, &format!("node{}", self.node_counter));
+
+        // Mark as having unsaved changes
+        self.file.has_unsaved_changes = true;
+    }
+
+    /// Renders the main canvas area with nodes, connections, and handles user interactions.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    fn draw_canvas(&mut self, ui: &mut egui::Ui) {
+        let (response, painter) = ui.allocate_painter(
+            ui.available_size(),
+            egui::Sense::click_and_drag()
+        );
+
+        // Initialize canvas to center the origin on first frame
+        if self.canvas.offset == egui::Vec2::ZERO && self.node_counter == 0 {
+            let canvas_center = response.rect.center();
+            self.canvas.offset = canvas_center.to_vec2();
+        }
+
+        // Handle canvas panning with middle mouse button or Ctrl+drag
+        self.handle_canvas_panning(ui, &response);
+
+        // Handle scroll wheel zooming
+        self.handle_canvas_zoom(ui, &response);
+
+        // Handle node dragging with left mouse button
+        self.handle_node_dragging(ui, &response);
+
+        // Render all flowchart elements
+        let canvas_rect = response.rect;
+        self.render_flowchart_elements(&painter, canvas_rect);
+
+        // Handle other interactions (selection, context menu)
+        self.handle_canvas_interactions(ui, &response);
+
+        // Show context menu if active
+        if self.context_menu.show {
+            self.draw_context_menu(ui);
+        }
+    }
+
+    /// Handles canvas click interactions for selection and context menu.
+    ///
+    /// # Arguments
+    ///
+    /// * `_ui` - The egui UI context (unused)
+    /// * `response` - The canvas response
+    fn handle_canvas_interactions(&mut self, _ui: &mut egui::Ui, response: &egui::Response) {
+        // Left-click for selection (only if not dragging or panning)
+        if response.clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let world_pos = self.screen_to_world(pos);
+
+                // First try to select a node
+                if let Some(node_id) = self.find_node_at_position(world_pos) {
+                    self.interaction.selected_node = Some(node_id);
+                    self.interaction.selected_connection = None;
+                    self.interaction.editing_node_name = None;
+                    // Clear temp producer values to reload from selected node
+                    self.clear_temp_editing_values();
+                } else {
+                    // Try to select a connection
+                    if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
+                        self.interaction.selected_connection = Some(conn_idx);
+                        self.interaction.selected_node = None;
+                        self.interaction.editing_node_name = None;
+                        self.clear_temp_editing_values();
+                    } else {
+                        // Clear selection if clicking on empty space
+                        self.interaction.selected_node = None;
+                        self.interaction.selected_connection = None;
+                        self.interaction.editing_node_name = None;
+                        self.clear_temp_editing_values();
+                    }
+                }
+            }
+        }
+
+        // Right-click for context menu
+        if response.secondary_clicked() && !self.interaction.is_panning && self.interaction.dragging_node.is_none() {
+            if let Some(screen_pos) = response.interact_pointer_pos() {
+                let world_pos = self.screen_to_world(screen_pos);
+                self.context_menu.screen_pos = (screen_pos.x, screen_pos.y);
+                self.context_menu.world_pos = (world_pos.x, world_pos.y);
+                self.context_menu.show = true;
+                self.context_menu.just_opened = true;
+            }
+        }
+    }
+
+    /// Clears all temporary editing values for node properties.
+    fn clear_temp_editing_values(&mut self) {
+        self.interaction.temp_producer_start_step.clear();
+        self.interaction.temp_producer_messages_per_cycle.clear();
+        self.interaction.temp_producer_steps_between.clear();
+        self.interaction.temp_producer_message_template.clear();
+        self.interaction.temp_transformer_script.clear();
+    }
+}

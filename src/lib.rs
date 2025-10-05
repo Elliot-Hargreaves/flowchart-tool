@@ -16,22 +16,27 @@
 
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
+//! Flowchart Tool - A visual flowchart editor and simulator
+//!
+//! This application allows users to create, edit, and simulate flowcharts
+//! with different node types (Producer, Consumer, Transformer) and message passing.
 
-mod types;
+pub mod types;
+pub mod simulation;
 pub mod script_engine;
-mod simulation;
-mod ui;
+pub mod ui;
+
 
 // Re-export public types and functions
 pub use types::*;
 pub use simulation::*;
-use ui::FlowchartApp;
 
 #[cfg(target_arch = "wasm32")] // When compiling for web
 use {
     eframe::wasm_bindgen::{self, prelude::*, JsCast},
     web_sys::HtmlCanvasElement,
 };
+use crate::ui::FlowchartApp;
 
 /// Runs the flowchart application with default settings.
 /// 

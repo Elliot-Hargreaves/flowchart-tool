@@ -1,0 +1,358 @@
+//! Canvas interaction and navigation functionality.
+//!
+//! This module handles canvas panning, zooming, node dragging, connection drawing,
+//! and coordinate transformations between screen and world space.
+
+use super::state::FlowchartApp;
+use crate::types::*;
+use eframe::egui;
+
+impl FlowchartApp {
+    /// Converts screen coordinates to world coordinates accounting for zoom and pan.
+    ///
+    /// # Arguments
+    ///
+    /// * `screen_pos` - Position in screen space (pixels)
+    ///
+    /// # Returns
+    ///
+    /// The corresponding position in world space
+    pub fn screen_to_world(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
+        (screen_pos - self.canvas.offset) / self.canvas.zoom_factor
+    }
+
+    /// Converts world coordinates to screen coordinates accounting for zoom and pan.
+    ///
+    /// # Arguments
+    ///
+    /// * `world_pos` - Position in world space
+    ///
+    /// # Returns
+    ///
+    /// The corresponding position in screen space (pixels)
+    pub fn world_to_screen(&self, world_pos: egui::Pos2) -> egui::Pos2 {
+        world_pos * self.canvas.zoom_factor + self.canvas.offset
+    }
+
+    /// Snaps a position to the nearest grid point.
+    ///
+    /// Grid spacing is 20 world units. Useful for aligning nodes when shift-dragging.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - Position to snap
+    ///
+    /// # Returns
+    ///
+    /// The snapped position on the grid
+    pub fn snap_to_grid(&self, pos: egui::Pos2) -> egui::Pos2 {
+        const GRID_SIZE: f32 = 20.0;
+        egui::pos2(
+            (pos.x / GRID_SIZE).round() * GRID_SIZE,
+            (pos.y / GRID_SIZE).round() * GRID_SIZE,
+        )
+    }
+
+    /// Handles middle-click or Cmd/Ctrl+left-click canvas panning functionality.
+    ///
+    /// Uses Cmd on macOS and Ctrl on other platforms for modifier-based panning.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `response` - The response from the canvas widget
+    pub fn handle_canvas_panning(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        // Check for middle mouse button OR Cmd/Ctrl+left mouse button
+        // modifiers.command automatically uses Cmd on macOS and Ctrl elsewhere
+        let should_pan = ui.input(|i| i.pointer.middle_down() || 
+                                      (i.pointer.primary_down() && i.modifiers.command));
+
+        if should_pan {
+            if let Some(current_pos) = response.interact_pointer_pos() {
+                if !self.interaction.is_panning {
+                    self.interaction.is_panning = true;
+                    self.interaction.last_pan_pos = Some(current_pos);
+                } else if let Some(last_pos) = self.interaction.last_pan_pos {
+                    let delta = current_pos - last_pos;
+                    self.canvas.offset += delta;
+                    self.interaction.last_pan_pos = Some(current_pos);
+                }
+            }
+        } else {
+            self.interaction.is_panning = false;
+            self.interaction.last_pan_pos = None;
+        }
+    }
+
+    /// Handles scroll wheel zooming functionality.
+    ///
+    /// Zooms in/out while keeping the mouse cursor position fixed in world space.
+    /// Zoom range is clamped between 0.25x and 5.0x.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `response` - The response from the canvas widget
+    pub fn handle_canvas_zoom(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+
+        if scroll_delta != 0.0 {
+            // Use hover position if available, otherwise use response position
+            let mouse_pos = ui.input(|i| i.pointer.hover_pos())
+                .or_else(|| response.interact_pointer_pos());
+
+            if let Some(mouse_pos) = mouse_pos {
+                // Calculate the world position under the mouse cursor before zoom
+                let world_pos_before_zoom = self.screen_to_world(mouse_pos);
+
+                // Apply zoom change with smaller, more precise steps
+                let zoom_delta = if scroll_delta > 0.0 { 0.025 } else { -0.025 };
+                let old_zoom = self.canvas.zoom_factor;
+                self.canvas.zoom_factor = (self.canvas.zoom_factor + zoom_delta).clamp(0.25, 5.0);
+
+                // Only adjust offset if zoom actually changed
+                if (self.canvas.zoom_factor - old_zoom).abs() > f32::EPSILON {
+                    // Calculate where that world position should appear on screen after zoom
+                    let world_pos_after_zoom = self.world_to_screen(world_pos_before_zoom);
+
+                    // Adjust canvas offset to keep the world position under the mouse cursor
+                    let offset_adjustment = mouse_pos - world_pos_after_zoom;
+                    self.canvas.offset += offset_adjustment;
+                }
+            }
+        }
+    }
+
+    /// Handles node dragging functionality with left mouse button.
+    ///
+    /// Supports both normal dragging and shift+drag for grid-snapped movement.
+    /// Also handles shift+drag from a node to create connections.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui` - The egui UI context
+    /// * `response` - The response from the canvas widget
+    pub fn handle_node_dragging(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        if ui.input(|i| i.pointer.primary_down()) && !self.interaction.is_panning {
+            if let Some(current_pos) = response.interact_pointer_pos() {
+                let world_pos = self.screen_to_world(current_pos);
+                let shift_held = ui.input(|i| i.modifiers.shift);
+
+                // Check if we're starting a new interaction
+                if self.interaction.dragging_node.is_none() && self.interaction.drawing_connection_from.is_none() {
+                    // Check if clicking on a node
+                    if let Some(node_id) = self.find_node_at_position(world_pos) {
+                        if shift_held {
+                            // Shift-click on node: start drawing connection
+                            self.interaction.drawing_connection_from = Some(node_id);
+                            self.interaction.connection_draw_pos = Some(current_pos);
+                        } else {
+                            // Normal click on node: start dragging
+                            self.start_node_drag(node_id, current_pos, world_pos);
+                        }
+                    }
+                    // If not clicking on a node, do nothing (no drag starts)
+                } else if let Some(dragging_id) = self.interaction.dragging_node {
+                    // Continue dragging node - check shift for grid snapping
+                    self.update_dragged_node_position(dragging_id, world_pos, ui);
+                } else if self.interaction.drawing_connection_from.is_some() {
+                    // Continue drawing connection - update preview position
+                    self.interaction.connection_draw_pos = Some(current_pos);
+                }
+            }
+        } else {
+            // Mouse released - finalize connection if drawing
+            if self.interaction.drawing_connection_from.is_some() {
+                if let Some(current_pos) = response.interact_pointer_pos() {
+                    let world_pos = self.screen_to_world(current_pos);
+                    self.finalize_connection(world_pos);
+                }
+            }
+
+            // Stop all dragging/drawing operations when mouse released
+            self.interaction.dragging_node = None;
+            self.interaction.drag_start_pos = None;
+            self.interaction.drawing_connection_from = None;
+            self.interaction.connection_draw_pos = None;
+        }
+    }
+
+    /// Starts dragging the specified node.
+    ///
+    /// Records the initial drag position and calculates the offset from the mouse
+    /// to the node center for smooth dragging.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to start dragging
+    /// * `current_pos` - Current mouse position in screen space
+    /// * `world_pos` - Current mouse position in world space
+    fn start_node_drag(&mut self, node_id: NodeId, current_pos: egui::Pos2, world_pos: egui::Pos2) {
+        self.interaction.dragging_node = Some(node_id);
+        self.interaction.drag_start_pos = Some(current_pos);
+
+        // Calculate offset from node center to mouse position for smooth dragging
+        if let Some(node) = self.flowchart.nodes.get(&node_id) {
+            let node_center = egui::pos2(node.position.0, node.position.1);
+            self.interaction.node_drag_offset = node_center - world_pos;
+        }
+    }
+
+    /// Updates the position of the currently dragged node.
+    ///
+    /// Supports grid snapping when Shift is held during dragging.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node being dragged
+    /// * `world_pos` - Current mouse position in world space
+    /// * `ui` - The egui UI context for checking modifiers
+    fn update_dragged_node_position(&mut self, node_id: NodeId, world_pos: egui::Pos2, ui: &egui::Ui) {
+        let mut new_world_pos = world_pos + self.interaction.node_drag_offset;
+
+        // Check if Shift is held for grid snapping
+        if ui.input(|i| i.modifiers.shift) {
+            new_world_pos = self.snap_to_grid(new_world_pos);
+        }
+
+        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+            node.position = (new_world_pos.x, new_world_pos.y);
+        }
+    }
+
+    /// Finalizes connection creation when mouse is released.
+    ///
+    /// Validates the connection based on node types and creates it if valid.
+    /// Prevents self-connections and enforces rules like "Consumer cannot send".
+    ///
+    /// # Arguments
+    ///
+    /// * `world_pos` - Final mouse position in world space
+    fn finalize_connection(&mut self, world_pos: egui::Pos2) {
+        if let Some(from_node_id) = self.interaction.drawing_connection_from {
+            if let Some(to_node_id) = self.find_node_at_position(world_pos) {
+                // Don't create self-connections
+                if from_node_id != to_node_id {
+                    // Validate node types for connection rules
+                    let from_node = self.flowchart.nodes.get(&from_node_id);
+                    let to_node = self.flowchart.nodes.get(&to_node_id);
+
+                    if let (Some(from), Some(to)) = (from_node, to_node) {
+                        // Check if connection is allowed based on node types
+                        let is_valid_connection = match (&from.node_type, &to.node_type) {
+                            // Consumer cannot send (cannot be source)
+                            (NodeType::Consumer { .. }, _) => false,
+                            // Producer cannot receive (cannot be target)
+                            (_, NodeType::Producer { .. }) => false,
+                            // All other combinations are valid
+                            _ => true,
+                        };
+
+                        if !is_valid_connection {
+                            return;
+                        }
+
+                        // Check if connection already exists
+                        let connection_exists = self.flowchart.connections.iter().any(|c| {
+                            c.from == from_node_id && c.to == to_node_id
+                        });
+
+                        if !connection_exists {
+                            // Create new connection
+                            let connection = Connection::new(from_node_id, to_node_id);
+                            self.flowchart.connections.push(connection);
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Finds the node at the given canvas position, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - Position in world space to check
+    ///
+    /// # Returns
+    ///
+    /// The ID of the node at that position, or `None` if no node is there
+    pub fn find_node_at_position(&self, pos: egui::Pos2) -> Option<NodeId> {
+        const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
+
+        for (id, node) in &self.flowchart.nodes {
+            let node_pos = egui::pos2(node.position.0, node.position.1);
+            let rect = egui::Rect::from_center_size(node_pos, NODE_SIZE);
+
+            if rect.contains(pos) {
+                return Some(*id);
+            }
+        }
+        None
+    }
+
+    /// Finds the connection at the given world position, if any.
+    ///
+    /// Uses distance-to-line-segment calculation with a threshold for hit detection.
+    ///
+    /// # Arguments
+    ///
+    /// * `pos` - Position in world space to check
+    ///
+    /// # Returns
+    ///
+    /// The index of the connection in the connections vector, or `None` if no connection is there
+    pub fn find_connection_at_position(&self, pos: egui::Pos2) -> Option<usize> {
+        const CLICK_THRESHOLD: f32 = 10.0; // pixels in world space
+
+        for (idx, connection) in self.flowchart.connections.iter().enumerate() {
+            if let (Some(from_node), Some(to_node)) = (
+                self.flowchart.nodes.get(&connection.from),
+                self.flowchart.nodes.get(&connection.to),
+            ) {
+                let start = egui::pos2(from_node.position.0, from_node.position.1);
+                let end = egui::pos2(to_node.position.0, to_node.position.1);
+
+                // Calculate distance from point to line segment
+                let distance = self.point_to_line_distance(pos, start, end);
+
+                if distance < CLICK_THRESHOLD {
+                    return Some(idx);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Calculates the distance from a point to a line segment.
+    ///
+    /// Uses vector projection to find the closest point on the line segment.
+    ///
+    /// # Arguments
+    ///
+    /// * `point` - The point to measure from
+    /// * `line_start` - Start of the line segment
+    /// * `line_end` - End of the line segment
+    ///
+    /// # Returns
+    ///
+    /// The minimum distance from the point to the line segment
+    fn point_to_line_distance(&self, point: egui::Pos2, line_start: egui::Pos2, line_end: egui::Pos2) -> f32 {
+        let line_vec = line_end - line_start;
+        let point_vec = point - line_start;
+        let line_len_sq = line_vec.length_sq();
+
+        if line_len_sq < 0.0001 {
+            // Line segment is essentially a point
+            return point_vec.length();
+        }
+
+        // Project point onto line segment (clamped to segment endpoints)
+        let t = (point_vec.dot(line_vec) / line_len_sq).clamp(0.0, 1.0);
+        let projection = line_start + line_vec * t;
+
+        (point - projection).length()
+    }
+}
