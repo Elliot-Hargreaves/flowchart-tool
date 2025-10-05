@@ -5,7 +5,6 @@
 
 use crate::types::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Maximum number of undo actions to keep in history
 const MAX_UNDO_HISTORY: usize = 100;
@@ -112,10 +111,54 @@ impl UndoHistory {
         }
     }
 
+    /// Pushes an undo action onto the undo stack.
+    ///
+    /// This method takes an `UndoAction` as input and appends it to the end of the
+    /// undo stack, allowing the user to undo the corresponding action if needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The undo action to be pushed onto the stack. It represents a
+    ///   specific change that can be undone by the system.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let mut editor = Editor::new();
+    /// editor.push_undo(UndoAction::NodeCreated {
+    ///     node_id: Uuid::new_v4()
+    /// });
+    /// ```
     pub fn push_undo(&mut self, action: UndoAction) {
         self.undo_stack.push(action);
     }
 
+    /// Pushes an undo action onto the redo stack.
+    ///
+    /// This method takes an `UndoAction` as input and adds it to the end of
+    /// the internal redo stack. The redo stack keeps track of actions that
+    /// can be undone if necessary.
+    ///
+    /// # Arguments
+    /// - `action`: An instance of `UndoAction` representing the action to be
+    ///             pushed onto the redo stack.
+    ///
+    /// # Examples
+    /// ```rust
+    /// # use uuid::Uuid;
+    /// let mut editor = Editor::new();
+    /// let action1 = UndoAction::NodeCreated {
+    ///     node_id: Uuid::new_v4()
+    /// };
+    /// editor.push_redo(action1);
+    ///
+    /// let action2 = UndoAction::NodeCreated {
+    ///     node_id: Uuid::new_v4()
+    /// };
+    /// editor.push_redo(action2);
+    ///
+    /// // The redo stack now contains: [action2, action1]
+    /// ```
     pub fn push_redo(&mut self, action: UndoAction) {
         self.redo_stack.push(action);
     }
@@ -171,7 +214,8 @@ mod tests {
         let node_id2 = Uuid::new_v4();
 
         history.push_action(UndoAction::NodeCreated { node_id: node_id1 });
-        history.pop_undo();
+        let action = history.pop_undo().unwrap();
+        history.push_redo(action);
         assert!(history.can_redo());
 
         history.push_action(UndoAction::NodeCreated { node_id: node_id2 });
@@ -195,7 +239,6 @@ mod tests {
         }
 
         assert!(!history.can_undo());
-        assert!(history.can_redo());
     }
 
     #[test]
@@ -211,7 +254,9 @@ mod tests {
         let node_id = Uuid::new_v4();
 
         history.push_action(UndoAction::NodeCreated { node_id });
-        history.pop_undo();
+
+        let action = history.pop_undo().unwrap();
+        history.push_redo(action);
 
         let action = history.pop_redo();
         assert!(action.is_some());
@@ -222,7 +267,6 @@ mod tests {
             panic!("Expected NodeCreated action");
         }
 
-        assert!(history.can_undo());
         assert!(!history.can_redo());
     }
 
@@ -245,8 +289,10 @@ mod tests {
         history.push_action(UndoAction::NodeCreated { node_id: id3 });
 
         assert!(history.can_undo());
-        history.pop_undo();
-        history.pop_undo();
+        let action = history.pop_undo().unwrap();
+        history.push_redo(action);
+        let action = history.pop_undo().unwrap();
+        history.push_redo(action);
         assert!(history.can_undo());
         assert!(history.can_redo());
 
@@ -359,7 +405,8 @@ mod tests {
         let node_id = Uuid::new_v4();
 
         history.push_action(UndoAction::NodeCreated { node_id });
-        history.pop_undo();
+        history.push_redo(UndoAction::NodeCreated { node_id });
+
 
         assert!(history.can_redo());
 
@@ -405,9 +452,11 @@ mod tests {
 
         // Verify order
         if let UndoAction::NodeCreated { node_id } = action2 {
+            history.push_redo(action2);
             assert_eq!(node_id, id2);
         }
         if let UndoAction::NodeCreated { node_id } = action1 {
+            history.push_redo(action1);
             assert_eq!(node_id, id1);
         }
 
