@@ -19,6 +19,10 @@ pub enum UndoAction {
         old_position: (f32, f32),
         new_position: (f32, f32),
     },
+        /// Multiple nodes were moved (e.g., during auto-layout)
+        MultipleNodesMoved {
+            moves: Vec<(NodeId, (f32, f32))>,
+        },
     /// A node's property was changed (e.g., script, template, parameters)
     PropertyChanged {
         node_id: NodeId,
@@ -442,6 +446,17 @@ impl UndoableFlowchart for Flowchart {
                     None
                 }
             }
+            UndoAction::MultipleNodesMoved { moves } => {
+                let mut new_moves = Vec::new();
+                for (node_id, old_position) in moves {
+                    if let Some(node) = self.nodes.get_mut(node_id) {
+                        let current_position = node.position;
+                        node.position = *old_position;
+                        new_moves.push((*node_id, current_position));
+                    }
+                }
+                Some(UndoAction::MultipleNodesMoved { moves: new_moves })
+            }
             UndoAction::PropertyChanged {
                 node_id,
                 old_node_type,
@@ -507,6 +522,17 @@ impl UndoableFlowchart for Flowchart {
                 } else {
                     None
                 }
+            }
+            UndoAction::MultipleNodesMoved { moves } => {
+                let mut old_moves = Vec::new();
+                for (node_id, new_position) in moves {
+                    if let Some(node) = self.nodes.get_mut(node_id) {
+                        let old_position = node.position;
+                        node.position = *new_position;
+                        old_moves.push((*node_id, old_position));
+                    }
+                }
+                Some(UndoAction::MultipleNodesMoved { moves: old_moves })
             }
             UndoAction::NodeRenamed {
                 node_id,

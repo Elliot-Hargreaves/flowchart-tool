@@ -271,6 +271,13 @@ impl FlowchartApp {
 
             ui.separator();
 
+            // Layout operations
+            if ui.button("Auto Layout").clicked() {
+                self.auto_layout_graph();
+            }
+
+            ui.separator();
+
             // View options
             ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
 
@@ -1020,5 +1027,166 @@ impl FlowchartApp {
                 self.clear_temp_editing_values();
             }
         }
+    }
+
+    /// Automatically organizes nodes using a force-directed layout algorithm.
+    /// 
+    /// This method applies forces to nodes to create an aesthetically pleasing layout:
+    /// - Repulsion between all nodes (to prevent overlap)
+    /// - Attraction along connections (to keep connected nodes together)
+    /// - Centers the final layout around the origin (0, 0)
+    /// 
+    /// The algorithm accounts for node size (100x70) and adds extra spacing
+    /// to ensure connections are visible between nodes.
+    fn auto_layout_graph(&mut self) {
+        if self.flowchart.nodes.is_empty() {
+            return;
+        }
+
+        // Store original positions for undo
+        let original_positions: Vec<(NodeId, (f32, f32))> = self
+            .flowchart
+            .nodes
+            .iter()
+            .map(|(id, node)| (*id, node.position))
+            .collect();
+
+        // Constants for the force-directed algorithm
+        const ITERATIONS: usize = 500;
+        const REPULSION_STRENGTH: f32 = 50000.0;
+        const ATTRACTION_STRENGTH: f32 = 0.08;
+        const DAMPING: f32 = 0.85;
+
+        // Node dimensions and spacing
+        const NODE_WIDTH: f32 = 100.0;
+        const NODE_HEIGHT: f32 = 70.0;
+        const SPACING_BUFFER: f32 = 10.0; // Extra space between nodes for connections
+
+        // Calculate minimum safe distance between node centers
+        // Using diagonal distance plus buffer for more natural spacing
+        let min_distance: f32 = ((NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT).sqrt()
+            + SPACING_BUFFER * 2.0);
+
+        // Initialize velocities for all nodes
+        let mut velocities: std::collections::HashMap<NodeId, (f32, f32)> =
+            std::collections::HashMap::new();
+        for node_id in self.flowchart.nodes.keys() {
+            velocities.insert(*node_id, (0.0, 0.0));
+        }
+
+        // Run simulation iterations
+        for _ in 0..ITERATIONS {
+            // Calculate forces for each node
+            let mut forces: std::collections::HashMap<NodeId, (f32, f32)> =
+                std::collections::HashMap::new();
+
+            // Initialize all forces to zero
+            for node_id in self.flowchart.nodes.keys() {
+                forces.insert(*node_id, (0.0, 0.0));
+            }
+
+            // Repulsion forces between all pairs of nodes
+            let node_ids: Vec<NodeId> = self.flowchart.nodes.keys().copied().collect();
+            for i in 0..node_ids.len() {
+                for j in (i + 1)..node_ids.len() {
+                    let id1 = node_ids[i];
+                    let id2 = node_ids[j];
+
+                    if let (Some(node1), Some(node2)) = 
+                        (self.flowchart.nodes.get(&id1), self.flowchart.nodes.get(&id2)) {
+                        let dx = node1.position.0 - node2.position.0;
+                        let dy = node1.position.1 - node2.position.1;
+                        let distance = (dx * dx + dy * dy).sqrt().max(1.0);
+
+                        // Stronger repulsion force when nodes are closer than minimum distance
+                        let force_magnitude = if distance < min_distance {
+                            // Extra strong repulsion to prevent overlaps
+                            REPULSION_STRENGTH / (distance * distance) * 2.0
+                        } else {
+                            REPULSION_STRENGTH / (distance * distance)
+                        };
+
+                        let fx = (dx / distance) * force_magnitude;
+                        let fy = (dy / distance) * force_magnitude;
+
+                        // Apply equal and opposite forces
+                        let force1 = forces.get(&id1).unwrap();
+                        forces.insert(id1, (force1.0 + fx, force1.1 + fy));
+
+                        let force2 = forces.get(&id2).unwrap();
+                        forces.insert(id2, (force2.0 - fx, force2.1 - fy));
+                    }
+                }
+            }
+
+            // Attraction forces along connections
+            for connection in &self.flowchart.connections {
+                if let (Some(from_node), Some(to_node)) = (
+                    self.flowchart.nodes.get(&connection.from),
+                    self.flowchart.nodes.get(&connection.to),
+                ) {
+                    let dx = to_node.position.0 - from_node.position.0;
+                    let dy = to_node.position.1 - from_node.position.1;
+                    let distance = (dx * dx + dy * dy).sqrt().max(1.0);
+
+                    // Spring force proportional to distance, but weaker for very close nodes
+                    let ideal_distance = min_distance * 1.5; // Prefer nodes to be a bit farther than minimum
+                    let displacement = distance - ideal_distance;
+                    let fx = (dx / distance) * displacement * ATTRACTION_STRENGTH;
+                    let fy = (dy / distance) * displacement * ATTRACTION_STRENGTH;
+
+                    // Apply forces
+                    let force_from = forces.get(&connection.from).unwrap();
+                    forces.insert(connection.from, (force_from.0 + fx, force_from.1 + fy));
+
+                    let force_to = forces.get(&connection.to).unwrap();
+                    forces.insert(connection.to, (force_to.0 - fx, force_to.1 - fy));
+                }
+            }
+
+            // Update velocities and positions
+            for (node_id, force) in &forces {
+                if let Some(node) = self.flowchart.nodes.get_mut(node_id) {
+                    let velocity = velocities.get_mut(node_id).unwrap();
+
+                    // Update velocity with damping
+                    velocity.0 = (velocity.0 + force.0) * DAMPING;
+                    velocity.1 = (velocity.1 + force.1) * DAMPING;
+
+                    // Update position
+                    node.position.0 += velocity.0;
+                    node.position.1 += velocity.1;
+                }
+            }
+        }
+
+        // Center the layout around the origin
+        if !self.flowchart.nodes.is_empty() {
+            // Calculate center of mass
+            let mut center_x = 0.0;
+            let mut center_y = 0.0;
+            let node_count = self.flowchart.nodes.len() as f32;
+
+            for node in self.flowchart.nodes.values() {
+                center_x += node.position.0;
+                center_y += node.position.1;
+            }
+
+            center_x /= node_count;
+            center_y /= node_count;
+
+            // Shift all nodes to center the layout at origin
+            for node in self.flowchart.nodes.values_mut() {
+                node.position.0 -= center_x;
+                node.position.1 -= center_y;
+            }
+        }
+
+        // Record undo action for the layout operation
+        self.undo_history.push_action(UndoAction::MultipleNodesMoved {
+            moves: original_positions,
+        });
+
+        self.file.has_unsaved_changes = true;
     }
 }
