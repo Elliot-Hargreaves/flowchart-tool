@@ -6,6 +6,7 @@
 use super::state::FlowchartApp;
 use crate::types::*;
 use eframe::egui;
+use crate::ui::UndoAction;
 
 impl FlowchartApp {
     /// Converts screen coordinates to world coordinates accounting for zoom and pan.
@@ -169,9 +170,15 @@ impl FlowchartApp {
                 }
             }
 
+            // Record undo for node movement when drag ends
+            if let (Some(node_id), Some(old_pos)) = (self.interaction.dragging_node, self.interaction.drag_original_position) {
+                self.record_node_movement(node_id, old_pos);
+            }
+
             // Stop all dragging/drawing operations when mouse released
             self.interaction.dragging_node = None;
             self.interaction.drag_start_pos = None;
+            self.interaction.drag_original_position = None;
             self.interaction.drawing_connection_from = None;
             self.interaction.connection_draw_pos = None;
         }
@@ -195,6 +202,8 @@ impl FlowchartApp {
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             let node_center = egui::pos2(node.position.0, node.position.1);
             self.interaction.node_drag_offset = node_center - world_pos;
+            // Store original position for undo
+            self.interaction.drag_original_position = Some(node.position);
         }
     }
 
@@ -217,6 +226,27 @@ impl FlowchartApp {
 
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
             node.position = (new_world_pos.x, new_world_pos.y);
+        }
+    }
+
+    /// Records undo action for node movement when drag ends.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node that was dragged
+    /// * `old_position` - Position before drag started
+    fn record_node_movement(&mut self, node_id: NodeId, old_position: (f32, f32)) {
+        if let Some(node) = self.flowchart.nodes.get(&node_id) {
+            let new_position = node.position;
+            // Only record if position actually changed
+            if old_position != new_position {
+                self.undo_history.push_action(UndoAction::NodeMoved {
+                    node_id,
+                    old_position,
+                    new_position,
+                });
+                self.file.has_unsaved_changes = true;
+            }
         }
     }
 
@@ -261,6 +291,13 @@ impl FlowchartApp {
                             // Create new connection
                             let connection = Connection::new(from_node_id, to_node_id);
                             self.flowchart.connections.push(connection);
+
+                            // Record undo action for connection creation
+                            self.undo_history.push_action(UndoAction::ConnectionCreated {
+                                from: from_node_id,
+                                to: to_node_id,
+                            });
+
                             self.file.has_unsaved_changes = true;
                         }
                     }

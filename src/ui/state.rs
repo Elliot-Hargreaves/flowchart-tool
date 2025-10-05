@@ -6,6 +6,7 @@
 
 use crate::types::*;
 use crate::simulation::SimulationEngine;
+use super::undo::UndoHistory;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Sender, Receiver};
@@ -57,6 +58,9 @@ pub struct InteractionState {
     /// Initial mouse position when drag started
     #[serde(skip)]
     pub drag_start_pos: Option<egui::Pos2>,
+    /// Original node position before drag started (for undo)
+    #[serde(skip)]
+    pub drag_original_position: Option<(f32, f32)>,
     /// Offset from mouse to node center during dragging
     #[serde(skip)]
     pub node_drag_offset: egui::Vec2,
@@ -98,6 +102,7 @@ impl Default for InteractionState {
             should_select_text: false,
             dragging_node: None,
             drag_start_pos: None,
+            drag_original_position: None,
             node_drag_offset: egui::Vec2::ZERO,
             is_panning: false,
             last_pan_pos: None,
@@ -239,6 +244,8 @@ pub struct FlowchartApp {
     /// Frame counter for animation effects (e.g., flashing error borders)
     #[serde(skip)]
     pub frame_counter: u64,
+    /// Undo/redo history for tracking and reversing actions
+    pub undo_history: UndoHistory,
 }
 
 impl Default for FlowchartApp {
@@ -255,6 +262,7 @@ impl Default for FlowchartApp {
             file: FileState::default(),
             error_node: None,
             frame_counter: 0,
+            undo_history: UndoHistory::new(),
         }
     }
 }

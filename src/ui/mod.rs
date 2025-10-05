@@ -16,8 +16,10 @@ mod state;
 mod file_ops;
 mod canvas;
 mod rendering;
+mod undo;
 
 pub use state::FlowchartApp;
+pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
 use crate::types::*;
 use crate::simulation::SimulationEngine;
@@ -37,6 +39,9 @@ impl eframe::App for FlowchartApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle pending file operations
         self.handle_pending_operations(ctx);
+
+        // Handle undo/redo keyboard shortcuts
+        self.handle_undo_redo_keys(ctx);
 
         // Handle delete key for removing selected objects
         self.handle_delete_key(ctx);
@@ -90,6 +95,30 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    /// Handles undo/redo keyboard shortcuts.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctx` - The egui context for checking input
+    fn handle_undo_redo_keys(&mut self, ctx: &egui::Context) {
+        // Check if any text edit widget wants keyboard focus - if so, don't handle undo/redo
+        let is_editing_text = ctx.wants_keyboard_input();
+
+        if !is_editing_text {
+            // Ctrl+Z for undo
+            if ctx.input(|i| i.key_pressed(egui::Key::Z) && i.modifiers.command && !i.modifiers.shift) {
+                self.perform_undo();
+            }
+            // Ctrl+Shift+Z or Ctrl+Y for redo
+            else if ctx.input(|i| 
+                (i.key_pressed(egui::Key::Z) && i.modifiers.command && i.modifiers.shift) ||
+                (i.key_pressed(egui::Key::Y) && i.modifiers.command)
+            ) {
+                self.perform_redo();
+            }
+        }
+    }
+
     /// Handles delete key presses to remove selected nodes or connections.
     ///
     /// # Arguments
@@ -101,6 +130,21 @@ impl FlowchartApp {
 
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !is_editing_text {
             if let Some(selected_node) = self.interaction.selected_node {
+                // Store node and its connections for undo
+                if let Some(node) = self.flowchart.nodes.get(&selected_node).cloned() {
+                    let connections: Vec<Connection> = self.flowchart.connections
+                        .iter()
+                        .filter(|c| c.from == selected_node || c.to == selected_node)
+                        .cloned()
+                        .collect();
+
+                    // Record undo action before deletion
+                    self.undo_history.push_action(UndoAction::NodeDeleted {
+                        node,
+                        connections,
+                    });
+                }
+
                 // Remove the selected node
                 self.flowchart.nodes.remove(&selected_node);
 
@@ -114,6 +158,14 @@ impl FlowchartApp {
             } else if let Some(conn_idx) = self.interaction.selected_connection {
                 // Remove the selected connection
                 if conn_idx < self.flowchart.connections.len() {
+                    let connection = self.flowchart.connections[conn_idx].clone();
+
+                    // Record undo action before deletion
+                    self.undo_history.push_action(UndoAction::ConnectionDeleted {
+                        connection,
+                        index: conn_idx,
+                    });
+
                     self.flowchart.connections.remove(conn_idx);
                     self.interaction.selected_connection = None;
                     self.file.has_unsaved_changes = true;
@@ -142,6 +194,20 @@ impl FlowchartApp {
             if ui.button("Save As").clicked() {
                 self.save_as_flowchart();
             }
+
+            ui.separator();
+
+            // Undo/Redo operations
+            ui.add_enabled_ui(self.undo_history.can_undo(), |ui| {
+                if ui.button("⟲ Undo").clicked() {
+                    self.perform_undo();
+                }
+            });
+            ui.add_enabled_ui(self.undo_history.can_redo(), |ui| {
+                if ui.button("⟳ Redo").clicked() {
+                    self.perform_redo();
+                }
+            });
 
             ui.separator();
 
@@ -385,8 +451,19 @@ impl FlowchartApp {
     /// * `node_id` - ID of the node to update
     fn save_node_name_change(&mut self, node_id: NodeId) {
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
-            node.name = self.interaction.temp_node_name.clone();
-            self.file.has_unsaved_changes = true;
+            let old_name = node.name.clone();
+            let new_name = self.interaction.temp_node_name.clone();
+
+            // Only record undo if name actually changed
+            if old_name != new_name {
+                self.undo_history.push_action(UndoAction::NodeRenamed {
+                    node_id,
+                    old_name,
+                    new_name: new_name.clone(),
+                });
+                node.name = new_name;
+                self.file.has_unsaved_changes = true;
+            }
         }
         self.interaction.editing_node_name = None;
     }
@@ -398,42 +475,76 @@ impl FlowchartApp {
     /// * `node_id` - ID of the node to update
     /// * `property` - Name of the property to update
     fn update_producer_property(&mut self, node_id: NodeId, property: &str) {
-        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+        if let Some(node) = self.flowchart.nodes.get(&node_id) {
+            let old_node_type = node.node_type.clone();
+            let mut changed = false;
+
             if let NodeType::Producer { 
-                ref mut message_template,
-                ref mut start_step,
-                ref mut messages_per_cycle,
-                ref mut steps_between_cycles,
-                messages_produced: _
-            } = node.node_type {
+                mut message_template,
+                mut start_step,
+                mut messages_per_cycle,
+                mut steps_between_cycles,
+                messages_produced
+            } = node.node_type.clone() {
                 match property {
                     "start_step" => {
                         if let Ok(value) = self.interaction.temp_producer_start_step.parse::<u64>() {
-                            *start_step = value;
-                            self.file.has_unsaved_changes = true;
+                            if start_step != value {
+                                start_step = value;
+                                changed = true;
+                            }
                         }
                     }
                     "messages_per_cycle" => {
                         if let Ok(value) = self.interaction.temp_producer_messages_per_cycle.parse::<u32>() {
-                            *messages_per_cycle = value;
-                            self.file.has_unsaved_changes = true;
+                            if messages_per_cycle != value {
+                                messages_per_cycle = value;
+                                changed = true;
+                            }
                         }
                     }
                     "steps_between_cycles" => {
                         if let Ok(value) = self.interaction.temp_producer_steps_between.parse::<u32>() {
-                            *steps_between_cycles = value;
-                            self.file.has_unsaved_changes = true;
+                            if steps_between_cycles != value {
+                                steps_between_cycles = value;
+                                changed = true;
+                            }
                         }
                     }
                     "message_template" => {
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(
                             &self.interaction.temp_producer_message_template
                         ) {
-                            *message_template = value;
-                            self.file.has_unsaved_changes = true;
+                            if message_template != value {
+                                message_template = value;
+                                changed = true;
+                            }
                         }
                     }
                     _ => {}
+                }
+
+                if changed {
+                    let new_node_type = NodeType::Producer {
+                        message_template,
+                        start_step,
+                        messages_per_cycle,
+                        steps_between_cycles,
+                        messages_produced,
+                    };
+
+                    // Record undo action
+                    self.undo_history.push_action(UndoAction::PropertyChanged {
+                        node_id,
+                        old_node_type,
+                        new_node_type: new_node_type.clone(),
+                    });
+
+                    // Apply the change
+                    if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+                        node.node_type = new_node_type;
+                    }
+                    self.file.has_unsaved_changes = true;
                 }
             }
         }
@@ -446,12 +557,28 @@ impl FlowchartApp {
     /// * `node_id` - ID of the node to update
     /// * `property` - Name of the property to update
     fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
-        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
-            if let NodeType::Transformer { ref mut script } = node.node_type {
+        if let Some(node) = self.flowchart.nodes.get(&node_id) {
+            if let NodeType::Transformer { script } = &node.node_type {
                 if property == "script" {
-                    // Replace tabs with spaces to keep whitespace consistent
-                    *script = self.interaction.temp_transformer_script.replace("\t", "    ");
-                    self.file.has_unsaved_changes = true;
+                    let new_script = self.interaction.temp_transformer_script.replace("\t", "    ");
+                    // Only record undo if script actually changed
+                    if script != &new_script {
+                        let old_node_type = node.node_type.clone();
+                        let new_node_type = NodeType::Transformer { script: new_script };
+
+                        // Record undo action
+                        self.undo_history.push_action(UndoAction::PropertyChanged {
+                            node_id,
+                            old_node_type,
+                            new_node_type: new_node_type.clone(),
+                        });
+
+                        // Apply the change
+                        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+                            node.node_type = new_node_type;
+                        }
+                        self.file.has_unsaved_changes = true;
+                    }
                 }
             }
         }
@@ -672,6 +799,9 @@ impl FlowchartApp {
         let node_id = new_node.id;
         self.flowchart.add_node(new_node);
 
+        // Record undo action for node creation
+        self.undo_history.push_action(UndoAction::NodeCreated { node_id });
+
         // Select the new node and start editing its name immediately
         self.interaction.selected_node = Some(node_id);
         self.start_editing_node_name(node_id, &format!("node{}", self.node_counter));
@@ -775,5 +905,35 @@ impl FlowchartApp {
         self.interaction.temp_producer_steps_between.clear();
         self.interaction.temp_producer_message_template.clear();
         self.interaction.temp_transformer_script.clear();
+    }
+
+    /// Performs an undo operation.
+    fn perform_undo(&mut self) {
+        if let Some(action) = self.undo_history.pop_undo() {
+            if let Some(redo_action) = self.flowchart.apply_undo(&action) {
+                self.undo_history.push_redo(redo_action);
+                self.file.has_unsaved_changes = true;
+
+                // Clear selection and temp values to refresh UI
+                self.interaction.selected_node = None;
+                self.interaction.selected_connection = None;
+                self.clear_temp_editing_values();
+            }
+        }
+    }
+
+    /// Performs a redo operation.
+    fn perform_redo(&mut self) {
+        if let Some(action) = self.undo_history.pop_redo() {
+            if let Some(undo_action) = self.flowchart.apply_redo(&action) {
+                self.undo_history.push_action(undo_action);
+                self.file.has_unsaved_changes = true;
+
+                // Clear selection and temp values to refresh UI
+                self.interaction.selected_node = None;
+                self.interaction.selected_connection = None;
+                self.clear_temp_editing_values();
+            }
+        }
     }
 }
