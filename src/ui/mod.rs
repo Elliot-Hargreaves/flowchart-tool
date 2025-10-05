@@ -410,8 +410,8 @@ impl FlowchartApp {
         if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.save_node_name_change(selected_id);
         } else if response.lost_focus() {
-            // Cancel editing if focus lost without Enter
-            self.interaction.editing_node_name = None;
+            // Save changes when focus is lost
+            self.save_node_name_change(selected_id);
         }
     }
 
