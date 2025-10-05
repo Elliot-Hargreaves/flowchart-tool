@@ -1004,6 +1004,7 @@ impl FlowchartApp {
     fn perform_undo(&mut self) {
         if let Some(action) = self.undo_history.pop_undo() {
             if let Some(redo_action) = self.flowchart.apply_undo(&action) {
+                self.undo_history.push_redo(redo_action);
                 self.file.has_unsaved_changes = true;
 
                 // Clear selection and temp values to refresh UI
@@ -1018,7 +1019,9 @@ impl FlowchartApp {
     fn perform_redo(&mut self) {
         if let Some(action) = self.undo_history.pop_redo() {
             if let Some(undo_action) = self.flowchart.apply_redo(&action) {
-                self.undo_history.push_action(undo_action);
+                self.undo_history.push_undo(undo_action);
+                // Note: pop_redo already pushed the action to undo stack
+                // Don't call push_action here as it would clear the redo stack
                 self.file.has_unsaved_changes = true;
 
                 // Clear selection and temp values to refresh UI
@@ -1044,7 +1047,7 @@ impl FlowchartApp {
         }
 
         // Store original positions for undo
-        let original_positions: Vec<(NodeId, (f32, f32))> = self
+        let old_positions: Vec<(NodeId, (f32, f32))> = self
             .flowchart
             .nodes
             .iter()
@@ -1182,9 +1185,18 @@ impl FlowchartApp {
             }
         }
 
+        // Collect new positions after layout
+        let new_positions: Vec<(NodeId, (f32, f32))> = self
+            .flowchart
+            .nodes
+            .iter()
+            .map(|(id, node)| (*id, node.position))
+            .collect();
+
         // Record undo action for the layout operation
         self.undo_history.push_action(UndoAction::MultipleNodesMoved {
-            moves: original_positions,
+            old_positions,
+            new_positions,
         });
 
         self.file.has_unsaved_changes = true;

@@ -21,7 +21,8 @@ pub enum UndoAction {
     },
         /// Multiple nodes were moved (e.g., during auto-layout)
         MultipleNodesMoved {
-            moves: Vec<(NodeId, (f32, f32))>,
+            old_positions: Vec<(NodeId, (f32, f32))>,
+            new_positions: Vec<(NodeId, (f32, f32))>,
         },
     /// A node's property was changed (e.g., script, template, parameters)
     PropertyChanged {
@@ -105,11 +106,18 @@ impl UndoHistory {
     /// The action to undo, or None if the undo stack is empty
     pub fn pop_undo(&mut self) -> Option<UndoAction> {
         if let Some(action) = self.undo_stack.pop() {
-            self.redo_stack.push(action.clone());
             Some(action)
         } else {
             None
         }
+    }
+
+    pub fn push_undo(&mut self, action: UndoAction) {
+        self.undo_stack.push(action);
+    }
+
+    pub fn push_redo(&mut self, action: UndoAction) {
+        self.redo_stack.push(action);
     }
 
     /// Pops the most recent action from the redo stack.
@@ -119,7 +127,6 @@ impl UndoHistory {
     /// The action to redo, or None if the redo stack is empty
     pub fn pop_redo(&mut self) -> Option<UndoAction> {
         if let Some(action) = self.redo_stack.pop() {
-            self.undo_stack.push(action.clone());
             Some(action)
         } else {
             None
@@ -446,16 +453,17 @@ impl UndoableFlowchart for Flowchart {
                     None
                 }
             }
-            UndoAction::MultipleNodesMoved { moves } => {
-                let mut new_moves = Vec::new();
-                for (node_id, old_position) in moves {
+            UndoAction::MultipleNodesMoved { old_positions, new_positions } => {
+                // Restore old positions
+                for (node_id, old_position) in old_positions {
                     if let Some(node) = self.nodes.get_mut(node_id) {
-                        let current_position = node.position;
                         node.position = *old_position;
-                        new_moves.push((*node_id, current_position));
                     }
                 }
-                Some(UndoAction::MultipleNodesMoved { moves: new_moves })
+                Some(UndoAction::MultipleNodesMoved { 
+                    old_positions: new_positions.clone(),
+                    new_positions: old_positions.clone(),
+                })
             }
             UndoAction::PropertyChanged {
                 node_id,
@@ -523,17 +531,6 @@ impl UndoableFlowchart for Flowchart {
                     None
                 }
             }
-            UndoAction::MultipleNodesMoved { moves } => {
-                let mut old_moves = Vec::new();
-                for (node_id, new_position) in moves {
-                    if let Some(node) = self.nodes.get_mut(node_id) {
-                        let old_position = node.position;
-                        node.position = *new_position;
-                        old_moves.push((*node_id, old_position));
-                    }
-                }
-                Some(UndoAction::MultipleNodesMoved { moves: old_moves })
-            }
             UndoAction::NodeRenamed {
                 node_id,
                 old_name,
@@ -554,7 +551,124 @@ impl UndoableFlowchart for Flowchart {
     }
 
     fn apply_redo(&mut self, action: &UndoAction) -> Option<UndoAction> {
-        // Redo is just applying the reverse of an undo
-        self.apply_undo(action)
+        match action {
+            UndoAction::NodeMoved {
+                node_id,
+                old_position,
+                new_position,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.position = *new_position;
+                    Some(UndoAction::NodeMoved {
+                        node_id: *node_id,
+                        old_position: *old_position,
+                        new_position: *new_position,
+                    })
+                } else {
+                    None
+                }
+            }
+            UndoAction::MultipleNodesMoved { old_positions, new_positions } => {
+                // Apply new positions
+                for (node_id, new_position) in new_positions {
+                    if let Some(node) = self.nodes.get_mut(node_id) {
+                        node.position = *new_position;
+                    }
+                }
+                Some(UndoAction::MultipleNodesMoved {
+                    old_positions: old_positions.clone(),
+                    new_positions: new_positions.clone(),
+                })
+            }
+            UndoAction::PropertyChanged {
+                node_id,
+                old_node_type,
+                new_node_type,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.node_type = new_node_type.clone();
+                    Some(UndoAction::PropertyChanged {
+                        node_id: *node_id,
+                        old_node_type: old_node_type.clone(),
+                        new_node_type: new_node_type.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+            UndoAction::NodeDeleted { node, connections } => {
+                // Redo of a NodeDeleted means we need to restore the node (opposite of undo)
+                // When we undo a node creation, it becomes NodeDeleted
+                // When we redo that, we need to recreate the node
+                self.nodes.insert(node.id, node.clone());
+                for conn in connections {
+                    self.connections.push(conn.clone());
+                }
+                Some(UndoAction::NodeCreated { node_id: node.id })
+            }
+            UndoAction::ConnectionDeleted { connection, index } => {
+                // Redo of ConnectionDeleted means restore the connection (opposite of undo)
+                // When we undo a connection creation, it becomes ConnectionDeleted
+                // When we redo that, we need to recreate the connection
+                if *index <= self.connections.len() {
+                    self.connections.insert(*index, connection.clone());
+                } else {
+                    self.connections.push(connection.clone());
+                }
+                Some(UndoAction::ConnectionCreated {
+                    from: connection.from,
+                    to: connection.to,
+                })
+            }
+            UndoAction::NodeCreated { node_id } => {
+                // Redo of NodeCreated means we need to delete the node again (opposite of undo)
+                // When we undo a node deletion, it becomes NodeCreated
+                // When we redo that, we need to delete it again
+                if let Some(node) = self.nodes.remove(node_id) {
+                    let connections: Vec<Connection> = self
+                        .connections
+                        .iter()
+                        .filter(|c| c.from == *node_id || c.to == *node_id)
+                        .cloned()
+                        .collect();
+                    self.connections
+                        .retain(|c| c.from != *node_id && c.to != *node_id);
+                    Some(UndoAction::NodeDeleted { node, connections })
+                } else {
+                    None
+                }
+            }
+            UndoAction::ConnectionCreated { from, to } => {
+                // Redo of ConnectionCreated means delete the connection (opposite of undo)
+                // When we undo a connection deletion, it becomes ConnectionCreated
+                // When we redo that, we need to delete it again
+                if let Some(index) = self
+                    .connections
+                    .iter()
+                    .position(|c| c.from == *from && c.to == *to)
+                {
+                    let connection = self.connections.remove(index);
+                    Some(UndoAction::ConnectionDeleted { connection, index })
+                } else {
+                    None
+                }
+            }
+            UndoAction::NodeRenamed {
+                node_id,
+                old_name,
+                new_name,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.name = new_name.clone();
+                    Some(UndoAction::NodeRenamed {
+                        node_id: *node_id,
+                        old_name: old_name.clone(),
+                        new_name: new_name.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     }
 }
