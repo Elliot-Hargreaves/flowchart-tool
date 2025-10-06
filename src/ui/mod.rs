@@ -1018,9 +1018,8 @@ impl FlowchartApp {
     /// Performs a redo operation.
     fn perform_redo(&mut self) {
         if let Some(action) = self.undo_history.pop_redo() {
-            if let Some(undo_action) = self.flowchart.apply_redo(&action) {
+            if let Some(undo_action) = self.flowchart.apply_undo(&action) {
                 self.undo_history.push_undo(undo_action);
-                // Note: pop_redo already pushed the action to undo stack
                 // Don't call push_action here as it would clear the redo stack
                 self.file.has_unsaved_changes = true;
 
