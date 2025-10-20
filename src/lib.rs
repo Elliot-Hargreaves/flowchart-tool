@@ -16,10 +16,6 @@
 
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
-//! Flowchart Tool - A visual flowchart editor and simulator
-//!
-//! This application allows users to create, edit, and simulate flowcharts
-//! with different node types (Producer, Consumer, Transformer) and message passing.
 
 pub mod script_engine;
 pub mod simulation;

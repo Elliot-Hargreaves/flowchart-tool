@@ -329,10 +329,8 @@ impl FlowchartApp {
                     ui.label("Name:");
                     if self.interaction.editing_node_name == Some(selected_id) {
                         self.draw_name_editor(ui, selected_id);
-                    } else {
-                        if ui.button(&node.name).clicked() {
-                            self.start_editing_node_name(selected_id, &node.name);
-                        }
+                    } else if ui.button(&node.name).clicked() {
+                        self.start_editing_node_name(selected_id, &node.name);
                     }
 
                     ui.separator();
@@ -1064,8 +1062,8 @@ impl FlowchartApp {
 
         // Calculate minimum safe distance between node centers
         // Using diagonal distance plus buffer for more natural spacing
-        let min_distance: f32 = ((NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT).sqrt()
-            + SPACING_BUFFER * 2.0);
+        let min_distance: f32 = (NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT).sqrt()
+            + SPACING_BUFFER * 2.0;
 
         // Initialize velocities for all nodes
         let mut velocities: std::collections::HashMap<NodeId, (f32, f32)> =

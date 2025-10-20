@@ -265,6 +265,11 @@ impl JavaScriptEngine {
     }
 }
 
+/// Create a JavaScript script engine
+pub fn create_script_engine() -> Result<JavaScriptEngine, String> {
+    JavaScriptEngine::new()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::simulation::execute_transformer_script;
@@ -529,9 +534,4 @@ mod tests {
         // Original text should be preserved
         assert!(output["text"].is_string());
     }
-}
-
-/// Create a JavaScript script engine
-pub fn create_script_engine() -> Result<JavaScriptEngine, String> {
-    JavaScriptEngine::new()
 }

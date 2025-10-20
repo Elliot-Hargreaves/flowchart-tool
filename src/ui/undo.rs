@@ -14,39 +14,62 @@ const MAX_UNDO_HISTORY: usize = 100;
 pub enum UndoAction {
     /// A node was moved from one position to another
     NodeMoved {
+        /// The unique identifier of the node that moved
         node_id: NodeId,
+        /// The previous position of the node as (x, y)
         old_position: (f32, f32),
+        /// The new position of the node as (x, y)
         new_position: (f32, f32),
     },
-        /// Multiple nodes were moved (e.g., during auto-layout)
-        MultipleNodesMoved {
-            old_positions: Vec<(NodeId, (f32, f32))>,
-            new_positions: Vec<(NodeId, (f32, f32))>,
-        },
+    /// Multiple nodes were moved (e.g., during auto-layout)
+    MultipleNodesMoved {
+        /// Original positions for each affected node
+        old_positions: Vec<(NodeId, (f32, f32))>,
+        /// New positions for each affected node
+        new_positions: Vec<(NodeId, (f32, f32))>,
+    },
     /// A node's property was changed (e.g., script, template, parameters)
     PropertyChanged {
+        /// The node whose property changed
         node_id: NodeId,
+        /// The node's previous type/state before the change
         old_node_type: NodeType,
+        /// The node's new type/state after the change
         new_node_type: NodeType,
     },
     /// A node was deleted
     NodeDeleted {
+        /// The full node data that was deleted
         node: FlowchartNode,
+        /// Any connections that were removed along with the node
         connections: Vec<Connection>,
     },
     /// A connection was deleted
     ConnectionDeleted {
+        /// The removed connection data
         connection: Connection,
+        /// The index where the connection existed in the list
         index: usize,
     },
     /// A node was created
-    NodeCreated { node_id: NodeId },
+    NodeCreated { 
+        /// The unique identifier of the new node
+        node_id: NodeId 
+    },
     /// A connection was created
-    ConnectionCreated { from: NodeId, to: NodeId },
+    ConnectionCreated { 
+        /// Source node id
+        from: NodeId, 
+        /// Destination node id
+        to: NodeId 
+    },
     /// A node's name was changed
     NodeRenamed {
+        /// The node whose name changed
         node_id: NodeId,
+        /// The previous node name
         old_name: String,
+        /// The new node name
         new_name: String,
     },
 }
@@ -104,11 +127,7 @@ impl UndoHistory {
     ///
     /// The action to undo, or None if the undo stack is empty
     pub fn pop_undo(&mut self) -> Option<UndoAction> {
-        if let Some(action) = self.undo_stack.pop() {
-            Some(action)
-        } else {
-            None
-        }
+        self.undo_stack.pop()
     }
 
     /// Pushes an undo action onto the undo stack.
@@ -123,7 +142,7 @@ impl UndoHistory {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```ignore
     /// let mut editor = Editor::new();
     /// editor.push_undo(UndoAction::NodeCreated {
     ///     node_id: Uuid::new_v4()
@@ -141,10 +160,10 @@ impl UndoHistory {
     ///
     /// # Arguments
     /// - `action`: An instance of `UndoAction` representing the action to be
-    ///             pushed onto the redo stack.
+    ///   pushed onto the redo stack.
     ///
     /// # Examples
-    /// ```rust
+    /// ```ignore
     /// # use uuid::Uuid;
     /// let mut editor = Editor::new();
     /// let action1 = UndoAction::NodeCreated {
@@ -169,17 +188,136 @@ impl UndoHistory {
     ///
     /// The action to redo, or None if the redo stack is empty
     pub fn pop_redo(&mut self) -> Option<UndoAction> {
-        if let Some(action) = self.redo_stack.pop() {
-            Some(action)
-        } else {
-            None
-        }
+        self.redo_stack.pop()
     }
 
     /// Clears all undo and redo history.
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+    }
+}
+
+/// Extension methods for applying undo/redo actions to a flowchart.
+pub trait UndoableFlowchart {
+    /// Applies an undo action to reverse it.
+    fn apply_undo(&mut self, action: &UndoAction) -> Option<UndoAction>;
+}
+
+impl UndoableFlowchart for Flowchart {
+    fn apply_undo(&mut self, action: &UndoAction) -> Option<UndoAction> {
+        match action {
+            UndoAction::NodeMoved {
+                node_id,
+                old_position,
+                new_position,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.position = *old_position;
+                    Some(UndoAction::NodeMoved {
+                        node_id: *node_id,
+                        old_position: *new_position,
+                        new_position: *old_position,
+                    })
+                } else {
+                    None
+                }
+            }
+            UndoAction::MultipleNodesMoved { old_positions, new_positions } => {
+                // Restore old positions
+                for (node_id, old_position) in old_positions {
+                    if let Some(node) = self.nodes.get_mut(node_id) {
+                        node.position = *old_position;
+                    }
+                }
+                Some(UndoAction::MultipleNodesMoved { 
+                    old_positions: new_positions.clone(),
+                    new_positions: old_positions.clone(),
+                })
+            }
+            UndoAction::PropertyChanged {
+                node_id,
+                old_node_type,
+                new_node_type,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.node_type = old_node_type.clone();
+                    Some(UndoAction::PropertyChanged {
+                        node_id: *node_id,
+                        old_node_type: new_node_type.clone(),
+                        new_node_type: old_node_type.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+            UndoAction::NodeDeleted { node, connections } => {
+                // Restore the deleted node
+                self.nodes.insert(node.id, node.clone());
+                // Restore all connections involving this node
+                for conn in connections {
+                    self.connections.push(conn.clone());
+                }
+                Some(UndoAction::NodeCreated { node_id: node.id })
+            }
+            UndoAction::ConnectionDeleted { connection, index } => {
+                // Restore the connection at its original index
+                if *index <= self.connections.len() {
+                    self.connections.insert(*index, connection.clone());
+                } else {
+                    self.connections.push(connection.clone());
+                }
+                Some(UndoAction::ConnectionCreated {
+                    from: connection.from,
+                    to: connection.to,
+                })
+            }
+            UndoAction::NodeCreated { node_id } => {
+                // Remove the created node and its connections
+                if let Some(node) = self.nodes.remove(node_id) {
+                    let connections: Vec<Connection> = self
+                        .connections
+                        .iter()
+                        .filter(|c| c.from == *node_id || c.to == *node_id)
+                        .cloned()
+                        .collect();
+                    self.connections
+                        .retain(|c| c.from != *node_id && c.to != *node_id);
+                    Some(UndoAction::NodeDeleted { node, connections })
+                } else {
+                    None
+                }
+            }
+            UndoAction::ConnectionCreated { from, to } => {
+                // Remove the created connection
+                if let Some(index) = self
+                    .connections
+                    .iter()
+                    .position(|c| c.from == *from && c.to == *to)
+                {
+                    let connection = self.connections.remove(index);
+                    Some(UndoAction::ConnectionDeleted { connection, index })
+                } else {
+                    None
+                }
+            }
+            UndoAction::NodeRenamed {
+                node_id,
+                old_name,
+                new_name,
+            } => {
+                if let Some(node) = self.nodes.get_mut(node_id) {
+                    node.name = old_name.clone();
+                    Some(UndoAction::NodeRenamed {
+                        node_id: *node_id,
+                        old_name: new_name.clone(),
+                        new_name: old_name.clone(),
+                    })
+                } else {
+                    None
+                }
+            }
+        }
     }
 }
 
@@ -470,129 +608,6 @@ mod tests {
         }
         if let UndoAction::NodeCreated { node_id } = redo2 {
             assert_eq!(node_id, id2);
-        }
-    }
-}
-
-/// Extension methods for applying undo/redo actions to a flowchart.
-pub trait UndoableFlowchart {
-    /// Applies an undo action to reverse it.
-    fn apply_undo(&mut self, action: &UndoAction) -> Option<UndoAction>;
-}
-
-impl UndoableFlowchart for Flowchart {
-    fn apply_undo(&mut self, action: &UndoAction) -> Option<UndoAction> {
-        match action {
-            UndoAction::NodeMoved {
-                node_id,
-                old_position,
-                new_position,
-            } => {
-                if let Some(node) = self.nodes.get_mut(node_id) {
-                    node.position = *old_position;
-                    Some(UndoAction::NodeMoved {
-                        node_id: *node_id,
-                        old_position: *new_position,
-                        new_position: *old_position,
-                    })
-                } else {
-                    None
-                }
-            }
-            UndoAction::MultipleNodesMoved { old_positions, new_positions } => {
-                // Restore old positions
-                for (node_id, old_position) in old_positions {
-                    if let Some(node) = self.nodes.get_mut(node_id) {
-                        node.position = *old_position;
-                    }
-                }
-                Some(UndoAction::MultipleNodesMoved { 
-                    old_positions: new_positions.clone(),
-                    new_positions: old_positions.clone(),
-                })
-            }
-            UndoAction::PropertyChanged {
-                node_id,
-                old_node_type,
-                new_node_type,
-            } => {
-                if let Some(node) = self.nodes.get_mut(node_id) {
-                    node.node_type = old_node_type.clone();
-                    Some(UndoAction::PropertyChanged {
-                        node_id: *node_id,
-                        old_node_type: new_node_type.clone(),
-                        new_node_type: old_node_type.clone(),
-                    })
-                } else {
-                    None
-                }
-            }
-            UndoAction::NodeDeleted { node, connections } => {
-                // Restore the deleted node
-                self.nodes.insert(node.id, node.clone());
-                // Restore all connections involving this node
-                for conn in connections {
-                    self.connections.push(conn.clone());
-                }
-                Some(UndoAction::NodeCreated { node_id: node.id })
-            }
-            UndoAction::ConnectionDeleted { connection, index } => {
-                // Restore the connection at its original index
-                if *index <= self.connections.len() {
-                    self.connections.insert(*index, connection.clone());
-                } else {
-                    self.connections.push(connection.clone());
-                }
-                Some(UndoAction::ConnectionCreated {
-                    from: connection.from,
-                    to: connection.to,
-                })
-            }
-            UndoAction::NodeCreated { node_id } => {
-                // Remove the created node and its connections
-                if let Some(node) = self.nodes.remove(node_id) {
-                    let connections: Vec<Connection> = self
-                        .connections
-                        .iter()
-                        .filter(|c| c.from == *node_id || c.to == *node_id)
-                        .cloned()
-                        .collect();
-                    self.connections
-                        .retain(|c| c.from != *node_id && c.to != *node_id);
-                    Some(UndoAction::NodeDeleted { node, connections })
-                } else {
-                    None
-                }
-            }
-            UndoAction::ConnectionCreated { from, to } => {
-                // Remove the created connection
-                if let Some(index) = self
-                    .connections
-                    .iter()
-                    .position(|c| c.from == *from && c.to == *to)
-                {
-                    let connection = self.connections.remove(index);
-                    Some(UndoAction::ConnectionDeleted { connection, index })
-                } else {
-                    None
-                }
-            }
-            UndoAction::NodeRenamed {
-                node_id,
-                old_name,
-                new_name,
-            } => {
-                if let Some(node) = self.nodes.get_mut(node_id) {
-                    node.name = old_name.clone();
-                    Some(UndoAction::NodeRenamed {
-                        node_id: *node_id,
-                        old_name: new_name.clone(),
-                        new_name: old_name.clone(),
-                    })
-                } else {
-                    None
-                }
-            }
         }
     }
 }

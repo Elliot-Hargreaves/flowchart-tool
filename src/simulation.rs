@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub struct SimulationEngine {
     /// The JavaScript runtime environment for script execution
     #[serde(skip)]
+    #[allow(dead_code)]
     script_engine: Option<JavaScriptEngine>,
 }
 
