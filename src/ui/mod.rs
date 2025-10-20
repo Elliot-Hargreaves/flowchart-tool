@@ -21,10 +21,8 @@ mod undo;
 pub use state::FlowchartApp;
 pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
-use crate::simulation::SimulationEngine;
 use crate::types::*;
 use eframe::egui;
-use egui::TextBuffer;
 
 impl eframe::App for FlowchartApp {
     /// Main update function called by egui for each frame.
