@@ -40,9 +40,12 @@ impl Default for CanvasState {
 /// Tracks selection, dragging, editing, and connection drawing operations.
 #[derive(Serialize, Deserialize)]
 pub struct InteractionState {
-    /// Currently selected node ID, if any
+    /// Currently selected node ID, if any (kept for backward compatibility when exactly one node is selected)
     #[serde(skip)]
     pub selected_node: Option<NodeId>,
+    /// Currently selected multiple nodes (if empty, no node selected)
+    #[serde(skip)]
+    pub selected_nodes: Vec<NodeId>,
     /// Node currently being edited for name changes
     #[serde(skip)]
     pub editing_node_name: Option<NodeId>,
@@ -64,6 +67,9 @@ pub struct InteractionState {
     /// Original node position before drag started (for undo)
     #[serde(skip)]
     pub drag_original_position: Option<(f32, f32)>,
+    /// Map of original positions for multi-node drag (for undo)
+    #[serde(skip)]
+    pub drag_original_positions_multi: Vec<(NodeId, (f32, f32))>,
     /// Offset from mouse to node center during dragging
     #[serde(skip)]
     pub node_drag_offset: egui::Vec2,
@@ -73,6 +79,11 @@ pub struct InteractionState {
     /// Last mouse position during panning operation
     #[serde(skip)]
     pub last_pan_pos: Option<egui::Pos2>,
+    /// Marquee selection state: start and current end positions in screen space
+    #[serde(skip)]
+    pub marquee_start: Option<egui::Pos2>,
+    #[serde(skip)]
+    pub marquee_end: Option<egui::Pos2>,
     /// Node from which a connection is being drawn (shift-click drag)
     #[serde(skip)]
     pub drawing_connection_from: Option<NodeId>,
@@ -100,6 +111,7 @@ impl Default for InteractionState {
     fn default() -> Self {
         Self {
             selected_node: None,
+            selected_nodes: Vec::new(),
             editing_node_name: None,
             temp_node_name: String::new(),
             should_select_text: false,
@@ -107,9 +119,12 @@ impl Default for InteractionState {
             dragging_node: None,
             drag_start_pos: None,
             drag_original_position: None,
+            drag_original_positions_multi: Vec::new(),
             node_drag_offset: egui::Vec2::ZERO,
             is_panning: false,
             last_pan_pos: None,
+            marquee_start: None,
+            marquee_end: None,
             drawing_connection_from: None,
             connection_draw_pos: None,
             selected_connection: None,

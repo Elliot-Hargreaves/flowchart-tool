@@ -136,6 +136,10 @@ impl FlowchartApp {
     /// * `ui` - The egui UI context
     /// * `response` - The response from the canvas widget
     pub fn handle_node_dragging(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        // If a marquee selection is active, it takes priority over starting any node drag or connection
+        if self.interaction.marquee_start.is_some() {
+            return;
+        }
         if ui.input(|i| i.pointer.primary_down()) && !self.interaction.is_panning {
             if let Some(current_pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(current_pos);
@@ -175,17 +179,33 @@ impl FlowchartApp {
             }
 
             // Record undo for node movement when drag ends
-            if let (Some(node_id), Some(old_pos)) = (
-                self.interaction.dragging_node,
-                self.interaction.drag_original_position,
-            ) {
-                self.record_node_movement(node_id, old_pos);
+            if let Some(dragging_id) = self.interaction.dragging_node {
+                if self.interaction.selected_nodes.len() > 1 {
+                    // Multi-drag: record MultipleNodesMoved
+                    let old_positions = self.interaction.drag_original_positions_multi.clone();
+                    let mut new_positions: Vec<(NodeId, (f32, f32))> = Vec::new();
+                    for (id, _) in &old_positions {
+                        if let Some(n) = self.flowchart.nodes.get(id) {
+                            new_positions.push((*id, n.position));
+                        }
+                    }
+                    if !old_positions.is_empty() && old_positions != new_positions {
+                        self.undo_history.push_action(UndoAction::MultipleNodesMoved {
+                            old_positions,
+                            new_positions,
+                        });
+                        self.file.has_unsaved_changes = true;
+                    }
+                } else if let Some(old_pos) = self.interaction.drag_original_position {
+                    self.record_node_movement(dragging_id, old_pos);
+                }
             }
 
             // Stop all dragging/drawing operations when mouse released
             self.interaction.dragging_node = None;
             self.interaction.drag_start_pos = None;
             self.interaction.drag_original_position = None;
+            self.interaction.drag_original_positions_multi.clear();
             self.interaction.drawing_connection_from = None;
             self.interaction.connection_draw_pos = None;
         }
@@ -205,11 +225,27 @@ impl FlowchartApp {
         self.interaction.dragging_node = Some(node_id);
         self.interaction.drag_start_pos = Some(current_pos);
 
+        // Ensure selection includes the dragged node; if no multi-selection, select only this node
+        if !self.interaction.selected_nodes.iter().any(|&id| id == node_id) {
+            self.interaction.selected_nodes.clear();
+            self.interaction.selected_nodes.push(node_id);
+            self.interaction.selected_node = Some(node_id);
+            self.interaction.selected_connection = None;
+        }
+
+        // Prepare original positions for multi-drag undo
+        self.interaction.drag_original_positions_multi = self
+            .interaction
+            .selected_nodes
+            .iter()
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
+            .collect();
+
         // Calculate offset from node center to mouse position for smooth dragging
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             let node_center = egui::pos2(node.position.0, node.position.1);
             self.interaction.node_drag_offset = node_center - world_pos;
-            // Store original position for undo
+            // Store original position for undo (single)
             self.interaction.drag_original_position = Some(node.position);
         }
     }
@@ -234,6 +270,20 @@ impl FlowchartApp {
         // Check if Shift is held for grid snapping
         if ui.input(|i| i.modifiers.shift) {
             new_world_pos = self.snap_to_grid(new_world_pos);
+        }
+
+        // Compute delta to apply to all selected nodes if multi-drag
+        if let Some(dragged_node) = self.flowchart.nodes.get(&node_id).cloned() {
+            let delta = egui::vec2(new_world_pos.x - dragged_node.position.0, new_world_pos.y - dragged_node.position.1);
+            if self.interaction.selected_nodes.len() > 1 {
+                for id in self.interaction.selected_nodes.clone() {
+                    if let Some(n) = self.flowchart.nodes.get_mut(&id) {
+                        n.position.0 += delta.x;
+                        n.position.1 += delta.y;
+                    }
+                }
+                return;
+            }
         }
 
         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {

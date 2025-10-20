@@ -135,7 +135,44 @@ impl FlowchartApp {
         let is_editing_text = ctx.wants_keyboard_input();
 
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !is_editing_text {
-            if let Some(selected_node) = self.interaction.selected_node {
+            // If multiple nodes are selected, delete them together
+            if self.interaction.selected_nodes.len() > 1 {
+                // Capture nodes and connections for undo
+                let mut nodes: Vec<FlowchartNode> = Vec::new();
+                let mut connections: Vec<Connection> = Vec::new();
+
+                let selected_set: std::collections::HashSet<NodeId> =
+                    self.interaction.selected_nodes.iter().copied().collect();
+
+                // Collect node data
+                for id in &self.interaction.selected_nodes {
+                    if let Some(node) = self.flowchart.nodes.get(id).cloned() {
+                        nodes.push(node);
+                    }
+                }
+                // Collect all connections involving any selected node
+                for c in &self.flowchart.connections {
+                    if selected_set.contains(&c.from) || selected_set.contains(&c.to) {
+                        connections.push(c.clone());
+                    }
+                }
+
+                // Record combined undo action
+                self.undo_history.push_action(UndoAction::MultipleNodesDeleted { nodes: nodes.clone(), connections: connections.clone() });
+
+                // Perform deletion
+                for id in &self.interaction.selected_nodes {
+                    self.flowchart.nodes.remove(id);
+                }
+                self.flowchart.connections.retain(|c| !selected_set.contains(&c.from) && !selected_set.contains(&c.to));
+
+                // Clear selection
+                self.interaction.selected_nodes.clear();
+                self.interaction.selected_node = None;
+                self.interaction.selected_connection = None;
+                self.interaction.editing_node_name = None;
+                self.file.has_unsaved_changes = true;
+            } else if let Some(selected_node) = self.interaction.selected_node {
                 // Store node and its connections for undo
                 if let Some(node) = self.flowchart.nodes.get(&selected_node).cloned() {
                     let connections: Vec<Connection> = self
@@ -161,6 +198,7 @@ impl FlowchartApp {
 
                 // Clear selection
                 self.interaction.selected_node = None;
+                self.interaction.selected_nodes.clear();
                 self.interaction.editing_node_name = None;
                 self.file.has_unsaved_changes = true;
             } else if let Some(conn_idx) = self.interaction.selected_connection {
@@ -916,15 +954,16 @@ impl FlowchartApp {
         // Handle scroll wheel zooming
         self.handle_canvas_zoom(ui, &response);
 
-        // Handle node dragging with left mouse button
+        // Handle other interactions (selection, context menu, marquee start/update)
+        // Run this before node dragging so marquee gets priority over node drag
+        self.handle_canvas_interactions(ui, &response);
+
+        // Handle node dragging with left mouse button (respects marquee priority)
         self.handle_node_dragging(ui, &response);
 
-        // Render all flowchart elements
+        // Render all flowchart elements (including marquee rectangle if active)
         let canvas_rect = response.rect;
         self.render_flowchart_elements(&painter, canvas_rect);
-
-        // Handle other interactions (selection, context menu)
-        self.handle_canvas_interactions(ui, &response);
 
         // Show context menu if active
         if self.context_menu.show {
@@ -938,8 +977,66 @@ impl FlowchartApp {
     ///
     /// * `_ui` - The egui UI context (unused)
     /// * `response` - The canvas response
-    fn handle_canvas_interactions(&mut self, _ui: &mut egui::Ui, response: &egui::Response) {
-        // Left-click for selection (only if not dragging or panning)
+    fn handle_canvas_interactions(&mut self, ui: &mut egui::Ui, response: &egui::Response) {
+        // Marquee selection handling: primary down on empty space -> start marquee
+        if ui.input(|i| i.pointer.primary_down())
+            && !self.interaction.is_panning
+            && self.interaction.dragging_node.is_none()
+            && self.interaction.drawing_connection_from.is_none()
+        {
+            if let Some(pos) = response.interact_pointer_pos() {
+                // If a marquee is already active, always update its end point regardless of what's under the cursor
+                if self.interaction.marquee_start.is_some() {
+                    self.interaction.marquee_end = Some(pos);
+                } else {
+                    let world_pos = self.screen_to_world(pos);
+                    // Only start marquee if the press began on empty space (no node/connection)
+                    let over_node = self.find_node_at_position(world_pos).is_some();
+                    let over_conn = self.find_connection_at_position(world_pos).is_some();
+                    if !over_node && !over_conn {
+                        self.interaction.marquee_start = Some(pos);
+                        self.interaction.marquee_end = Some(pos);
+                        // Clear existing selection while selecting a new region
+                        self.interaction.selected_nodes.clear();
+                        self.interaction.selected_node = None;
+                        self.interaction.selected_connection = None;
+                    }
+                }
+            }
+        } else {
+            // On release: finalize marquee selection if active
+            if self.interaction.marquee_start.is_some() && self.interaction.marquee_end.is_some() {
+                let start_screen = self.interaction.marquee_start.unwrap();
+                let end_screen = self.interaction.marquee_end.unwrap();
+                let rect_screen = egui::Rect::from_two_pos(start_screen, end_screen);
+
+                // Convert to world rect corners for hit testing by node centers
+                let min_world = self.screen_to_world(rect_screen.min);
+                let max_world = self.screen_to_world(rect_screen.max);
+                let world_rect = egui::Rect::from_min_max(min_world, max_world);
+
+                self.interaction.selected_nodes.clear();
+                for (id, node) in &self.flowchart.nodes {
+                    let center = egui::pos2(node.position.0, node.position.1);
+                    if world_rect.contains(center) {
+                        self.interaction.selected_nodes.push(*id);
+                    }
+                }
+                // Sync single selection convenience field
+                if self.interaction.selected_nodes.len() == 1 {
+                    self.interaction.selected_node = Some(self.interaction.selected_nodes[0]);
+                } else {
+                    self.interaction.selected_node = None;
+                }
+
+                // Clear marquee visuals
+                self.interaction.marquee_start = None;
+                self.interaction.marquee_end = None;
+                self.clear_temp_editing_values();
+            }
+        }
+
+        // Left-click for selection (only if not dragging or panning) - single click behaviors
         if response.clicked()
             && !self.interaction.is_panning
             && self.interaction.dragging_node.is_none()
@@ -950,6 +1047,8 @@ impl FlowchartApp {
                 // First try to select a node
                 if let Some(node_id) = self.find_node_at_position(world_pos) {
                     self.interaction.selected_node = Some(node_id);
+                    self.interaction.selected_nodes.clear();
+                    self.interaction.selected_nodes.push(node_id);
                     self.interaction.selected_connection = None;
                     self.interaction.editing_node_name = None;
                     // Clear temp producer values to reload from selected node
@@ -959,11 +1058,13 @@ impl FlowchartApp {
                     if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
                         self.interaction.selected_connection = Some(conn_idx);
                         self.interaction.selected_node = None;
+                        self.interaction.selected_nodes.clear();
                         self.interaction.editing_node_name = None;
                         self.clear_temp_editing_values();
                     } else {
                         // Clear selection if clicking on empty space
                         self.interaction.selected_node = None;
+                        self.interaction.selected_nodes.clear();
                         self.interaction.selected_connection = None;
                         self.interaction.editing_node_name = None;
                         self.clear_temp_editing_values();
@@ -1005,6 +1106,7 @@ impl FlowchartApp {
 
                 // Clear selection and temp values to refresh UI
                 self.interaction.selected_node = None;
+                self.interaction.selected_nodes.clear();
                 self.interaction.selected_connection = None;
                 self.clear_temp_editing_values();
             }
@@ -1021,6 +1123,7 @@ impl FlowchartApp {
 
                 // Clear selection and temp values to refresh UI
                 self.interaction.selected_node = None;
+                self.interaction.selected_nodes.clear();
                 self.interaction.selected_connection = None;
                 self.clear_temp_editing_values();
             }

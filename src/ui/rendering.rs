@@ -42,6 +42,15 @@ impl FlowchartApp {
         for node in self.flowchart.nodes.values() {
             self.draw_node(painter, node);
         }
+
+        // Draw marquee selection rectangle if active
+        if let (Some(start), Some(end)) = (self.interaction.marquee_start, self.interaction.marquee_end) {
+            let rect = egui::Rect::from_two_pos(start, end);
+            let fill = egui::Color32::from_rgba_unmultiplied(100, 150, 255, 40);
+            let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 150, 255));
+            painter.rect_filled(rect, 0.0, fill);
+            painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+        }
     }
 
     /// Draws a zoom-aware grid on the canvas for visual reference.
@@ -416,7 +425,9 @@ impl FlowchartApp {
             }
         } else if Some(node.id) == self.interaction.dragging_node {
             (egui::Color32::from_rgb(255, 165, 0), 4.0) // Orange for dragging
-        } else if Some(node.id) == self.interaction.selected_node {
+        } else if Some(node.id) == self.interaction.selected_node
+            || self.interaction.selected_nodes.iter().any(|&id| id == node.id)
+        {
             (egui::Color32::YELLOW, 3.0) // Yellow for selected
         } else {
             (egui::Color32::BLACK, 2.0) // Black for normal

@@ -21,7 +21,7 @@ pub enum UndoAction {
         /// The new position of the node as (x, y)
         new_position: (f32, f32),
     },
-    /// Multiple nodes were moved (e.g., during auto-layout)
+    /// Multiple nodes were moved (e.g., during auto-layout or multi-drag)
     MultipleNodesMoved {
         /// Original positions for each affected node
         old_positions: Vec<(NodeId, (f32, f32))>,
@@ -42,6 +42,13 @@ pub enum UndoAction {
         /// The full node data that was deleted
         node: FlowchartNode,
         /// Any connections that were removed along with the node
+        connections: Vec<Connection>,
+    },
+    /// Multiple nodes were deleted together
+    MultipleNodesDeleted {
+        /// The full node data for each deleted node
+        nodes: Vec<FlowchartNode>,
+        /// All connections that were removed as a result
         connections: Vec<Connection>,
     },
     /// A connection was deleted
@@ -259,6 +266,21 @@ impl UndoableFlowchart for Flowchart {
                     self.connections.push(conn.clone());
                 }
                 Some(UndoAction::NodeCreated { node_id: node.id })
+            }
+            UndoAction::MultipleNodesDeleted { nodes, connections } => {
+                // Restore all nodes
+                for node in nodes {
+                    self.nodes.insert(node.id, node.clone());
+                }
+                // Restore all connections
+                for conn in connections {
+                    self.connections.push(conn.clone());
+                }
+                // Redo would delete them again
+                Some(UndoAction::MultipleNodesDeleted {
+                    nodes: nodes.clone(),
+                    connections: connections.clone(),
+                })
             }
             UndoAction::ConnectionDeleted { connection, index } => {
                 // Restore the connection at its original index
