@@ -2,6 +2,7 @@
 name = "flowchart_tool"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 egui = "0.32.3"
