@@ -2,6 +2,8 @@
 
 A cross‑platform desktop application written in Rust (egui/eframe) for creating, editing, and managing flowcharts. It provides an interactive canvas with node creation, selection, dragging, multi‑select, grid snapping, and connection wiring between nodes with validation rules (e.g., Consumers cannot send; Producers cannot receive). Undo/redo, file operations, and JSON serialization are supported.
 
+A web version can be found at [flowchart.coffy.dev](https://flowchart.coffy.dev/).
+
 ## Features
 - Interactive canvas using egui/eframe
 - Create, move, and multi‑select nodes
