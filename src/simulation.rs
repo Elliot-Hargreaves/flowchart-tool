@@ -98,7 +98,7 @@ impl SimulationEngine {
                     } => {
                         self.process_consumer_node(node);
                     }
-                    NodeType::Transformer { script } => {
+                    NodeType::Transformer { script, .. } => {
                         self.process_transformer_node(node, &script);
                     }
                 }
@@ -246,18 +246,67 @@ impl SimulationEngine {
                     node.state = NodeState::Processing;
                     Ok(())
                 }
-                NodeType::Transformer { script } => {
+                NodeType::Transformer { script, selected_outputs: _ } => {
                     // Execute JavaScript to transform the message
                     node.state = NodeState::Processing;
                     let script = script.clone();
 
                     // Execute the transformation script
-                    let transformed_messages = execute_transformer_script(&script, &message)?;
+                    let mut transformed_messages = match execute_transformer_script(&script, &message) {
+                        Ok(msgs) => msgs,
+                        Err(err) => {
+                            // Record error state on the node and propagate the error
+                            if let Some(n) = flowchart.nodes.get_mut(&node_id) {
+                                n.state = NodeState::Error(err.clone());
+                            }
+                            return Err(err);
+                        }
+                    };
 
-                    // Send transformed messages to all outgoing connections
-                    for transformed_message in transformed_messages {
+                    // Programmatic routing: each output message may include a special "__targets" field
+                    // which is an array of destination node names. If absent or null, broadcast to all.
+                    for mut transformed_message in transformed_messages.drain(..) {
+                        // Extract routing targets from message control field and strip it from payload
+                        let mut routing_targets: Option<Vec<String>> = None; // None = broadcast
+                        if let serde_json::Value::Object(ref mut map) = transformed_message.data {
+                            if map.contains_key("__targets") {
+                                let raw = map.remove("__targets").unwrap_or(serde_json::Value::Null);
+                                match raw {
+                                    serde_json::Value::Null => {
+                                        routing_targets = None; // broadcast
+                                    }
+                                    serde_json::Value::Array(arr) => {
+                                        let mut names = Vec::new();
+                                        for v in arr {
+                                            if let serde_json::Value::String(s) = v {
+                                                names.push(s);
+                                            }
+                                        }
+                                        routing_targets = Some(names);
+                                    }
+                                    _ => {
+                                        // Invalid type -> treat as broadcast
+                                        routing_targets = None;
+                                    }
+                                }
+                            }
+                        }
+
                         for connection in flowchart.connections.iter_mut() {
-                            if connection.from == node_id {
+                            if connection.from != node_id {
+                                continue;
+                            }
+                            let send = match &routing_targets {
+                                None => true, // broadcast
+                                Some(list) => {
+                                    if let Some(dest_node) = flowchart.nodes.get(&connection.to) {
+                                        list.iter().any(|name| name == &dest_node.name)
+                                    } else {
+                                        false
+                                    }
+                                }
+                            };
+                            if send {
                                 connection.messages.push(transformed_message.clone());
                             }
                         }
@@ -577,6 +626,7 @@ mod tests {
                     }
                 "#
                 .to_string(),
+                selected_outputs: None,
             },
         );
         let transformer_id = transformer.id;
@@ -635,6 +685,7 @@ mod tests {
                     }
                 "#
                 .to_string(),
+                selected_outputs: None,
             },
         );
         let transformer_id = transformer.id;
@@ -645,5 +696,82 @@ mod tests {
 
         // Should succeed, producing a message with null data
         assert!(result.is_ok());
+    }
+}
+
+
+#[cfg(test)]
+mod programmatic_routing_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_transformer_programmatic_routing_with_targets() {
+        let mut engine = SimulationEngine::new();
+        let mut flowchart = Flowchart::new();
+
+        // Create a transformer node that routes to a specific consumer based on __targets
+        let transformer = FlowchartNode::new(
+            "Router".to_string(),
+            (0.0, 0.0),
+            NodeType::Transformer {
+                script: r#"
+                    function transform(input) {
+                        // Route only to node named 'C2'
+                        return { value: input.x * 2, __targets: ["C2"] };
+                    }
+                "#
+                .to_string(),
+                selected_outputs: None,
+            },
+        );
+        let transformer_id = transformer.id;
+        flowchart.add_node(transformer);
+
+        // Two consumers
+        let c1 = FlowchartNode::new(
+            "C1".to_string(),
+            (150.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        );
+        let c1_id = c1.id;
+        flowchart.add_node(c1);
+
+        let c2 = FlowchartNode::new(
+            "C2".to_string(),
+            (150.0, 100.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        );
+        let c2_id = c2.id;
+        flowchart.add_node(c2);
+
+        // Connect transformer to both consumers
+        flowchart.add_connection(transformer_id, c1_id).unwrap();
+        flowchart.add_connection(transformer_id, c2_id).unwrap();
+
+        // Deliver a message to the transformer
+        let input = Message::new(json!({"x": 7}));
+        let res = engine.deliver_message(transformer_id, input, &mut flowchart);
+        assert!(res.is_ok());
+
+        // Only the connection to C2 should have a message
+        let to_c1 = flowchart
+            .connections
+            .iter()
+            .find(|c| c.from == transformer_id && c.to == c1_id)
+            .expect("connection to C1");
+        let to_c2 = flowchart
+            .connections
+            .iter()
+            .find(|c| c.from == transformer_id && c.to == c2_id)
+            .expect("connection to C2");
+
+        assert_eq!(to_c1.messages.len(), 0);
+        assert_eq!(to_c2.messages.len(), 1);
+
+        // Ensure the control field was stripped from payload
+        let payload = &to_c2.messages[0].data;
+        assert_eq!(payload.get("value"), Some(&json!(14)));
+        assert!(payload.get("__targets").is_none());
     }
 }

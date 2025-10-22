@@ -647,7 +647,7 @@ impl FlowchartApp {
     /// * `property` - Name of the property to update
     fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
-            if let NodeType::Transformer { script } = &node.node_type {
+            if let NodeType::Transformer { script, .. } = &node.node_type {
                 if property == "script" {
                     let new_script = self
                         .interaction
@@ -656,7 +656,8 @@ impl FlowchartApp {
                     // Only record undo if script actually changed
                     if script != &new_script {
                         let old_node_type = node.node_type.clone();
-                        let new_node_type = NodeType::Transformer { script: new_script };
+                        let selected_outputs = if let NodeType::Transformer { selected_outputs, .. } = &node.node_type { selected_outputs.clone() } else { None };
+                        let new_node_type = NodeType::Transformer { script: new_script, selected_outputs };
 
                         // Record undo action
                         self.undo_history.push_action(UndoAction::PropertyChanged {
@@ -668,7 +669,13 @@ impl FlowchartApp {
                         // Apply the change
                         if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
                             node.node_type = new_node_type;
+                            // Clear error state on script edits
+                            if let NodeState::Error(_) = node.state {
+                                node.state = NodeState::Idle;
+                            }
                         }
+                        // Clear global error highlight when script changes
+                        self.error_node = None;
                         self.file.has_unsaved_changes = true;
                     }
                 }
@@ -786,7 +793,7 @@ impl FlowchartApp {
             NodeType::Consumer { consumption_rate } => {
                 ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
             }
-            NodeType::Transformer { script } => {
+            NodeType::Transformer { script, .. } => {
                 // Initialize temp value if empty
                 if self.interaction.temp_transformer_script.is_empty() {
                     self.interaction.temp_transformer_script = script.clone();
@@ -810,6 +817,13 @@ impl FlowchartApp {
                 if text_edit_response.changed() {
                     self.update_transformer_property(node.id, "script");
                 }
+
+                // Show last script error if any
+                if let NodeState::Error(msg) = &node.state {
+                    ui.separator();
+                    ui.colored_label(egui::Color32::RED, format!("Script error: {}", msg));
+                }
+
             }
         }
     }
@@ -879,7 +893,8 @@ impl FlowchartApp {
 
                         if ui.button("Transformer").clicked() {
                             self.create_node_at_pos(NodeType::Transformer {
-                                script: "// Transform the input message\nfunction transform(input) {\n    //Just forward it on.\n    return input;\n}".to_string()
+                                script: "// Transform the input message with optional routing via __targets\nfunction transform(input) {\n    // To target specific outputs by node name, include __targets as an array.\n    // For example, send only to node named \"NextNode\":\n    // return { value: input.value, __targets: [\"NextNode\"] };\n    // If __targets is omitted or null, the message is broadcast to all outputs.\n    return input;\n}".to_string(),
+                                selected_outputs: None,
                             });
                             self.context_menu.show = false;
                         }

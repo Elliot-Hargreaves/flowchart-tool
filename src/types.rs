@@ -57,10 +57,13 @@ pub enum NodeType {
         /// Maximum number of messages to consume per simulation step
         consumption_rate: u32,
     },
-    /// A node that transforms messages using a Lua script
+    /// A node that transforms messages using JavaScript
     Transformer {
-        /// Lua script code for message transformation
+        /// JavaScript script code for message transformation
         script: String,
+        /// Optional list of destination node names to send to; None means broadcast to all
+        #[serde(default)]
+        selected_outputs: Option<Vec<String>>,
     },
 }
 
@@ -317,11 +320,12 @@ mod tests {
             (50.0, 50.0),
             NodeType::Transformer {
                 script: script.clone(),
+                selected_outputs: None,
             },
         );
 
         if let NodeType::Transformer {
-            script: node_script,
+            script: node_script, ..
         } = &node.node_type
         {
             assert_eq!(*node_script, script);
