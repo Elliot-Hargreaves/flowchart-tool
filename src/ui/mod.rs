@@ -23,6 +23,7 @@ pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
 use crate::types::*;
 use eframe::egui;
+use self::state::PendingConfirmAction;
 
 impl eframe::App for FlowchartApp {
     /// Main update function called by egui for each frame.
@@ -33,8 +34,8 @@ impl eframe::App for FlowchartApp {
     /// # Arguments
     ///
     /// * `ctx` - The egui context
-    /// * `_frame` - The eframe frame (unused)
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    /// * `frame` - The eframe frame
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Handle pending file operations
         self.handle_pending_operations(ctx);
 
@@ -43,6 +44,34 @@ impl eframe::App for FlowchartApp {
 
         // Handle delete key for removing selected objects
         self.handle_delete_key(ctx);
+
+        // Handle file-related keyboard shortcuts (New/Open/Save)
+        self.handle_file_shortcuts(ctx, frame);
+
+        // Intercept native window close requests (titlebar X)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if ctx.input(|i| i.viewport().close_requested()) {
+                if self.file.has_unsaved_changes && !self.file.allow_close_on_next_request {
+                    // Abort close and show confirmation dialog
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    if !self.file.show_unsaved_dialog {
+                        self.file.show_unsaved_dialog = true;
+                        self.file.pending_confirm_action = Some(PendingConfirmAction::Quit);
+                    }
+                } else {
+                    // Either no unsaved changes or user confirmed close; allow it and reset the one-shot flag
+                    self.file.allow_close_on_next_request = false;
+                }
+            }
+        }
+
+        // Properties panel on the right side
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Update browser beforeunload prompt based on unsaved state
+            Self::update_beforeunload(self.file.has_unsaved_changes);
+        }
 
         // Properties panel on the right side
         egui::SidePanel::right("properties_panel")
@@ -63,6 +92,54 @@ impl eframe::App for FlowchartApp {
                 self.draw_canvas(ui);
             });
         });
+
+        // Unsaved changes confirmation dialog
+        if self.file.show_unsaved_dialog {
+            let title = match self.file.pending_confirm_action {
+                Some(PendingConfirmAction::Quit) => "Unsaved changes — Quit?",
+                Some(PendingConfirmAction::New) => "Unsaved changes — Create New?",
+                Some(PendingConfirmAction::Open) => "Unsaved changes — Open File?",
+                None => "Unsaved changes",
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    ui.label("You have unsaved changes. Are you sure you want to continue?");
+                    ui.horizontal(|ui| {
+                        // Primary confirm button depends on action
+                        let confirm_label = match self.file.pending_confirm_action {
+                            Some(PendingConfirmAction::Quit) => "Discard and Quit",
+                            Some(PendingConfirmAction::New) => "Discard and Create New",
+                            Some(PendingConfirmAction::Open) => "Discard and Open",
+                            None => "Discard",
+                        };
+                        if ui.button(confirm_label).clicked() {
+                            match self.file.pending_confirm_action {
+                                Some(PendingConfirmAction::New) => {
+                                    self.new_flowchart();
+                                }
+                                Some(PendingConfirmAction::Open) => {
+                                    self.load_flowchart();
+                                }
+                                Some(PendingConfirmAction::Quit) => {
+                                    // Allow one close request to pass without interception
+                                    self.file.allow_close_on_next_request = true;
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                                None => {}
+                            }
+                            self.file.show_unsaved_dialog = false;
+                            self.file.pending_confirm_action = None;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.file.show_unsaved_dialog = false;
+                            self.file.pending_confirm_action = None;
+                        }
+                    });
+                });
+        }
 
         // Process simulation if running
         if self.is_simulation_running {
@@ -99,6 +176,80 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    #[cfg(target_arch = "wasm32")]
+    fn update_beforeunload(has_unsaved_changes: bool) {
+        if let Some(window) = web_sys::window() {
+            if has_unsaved_changes {
+                let closure = eframe::wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::Event| {
+                    event.prevent_default();
+                    // Set returnValue to trigger the confirmation dialog in some browsers
+                    let _ = js_sys::Reflect::set(
+                        event.as_ref(),
+                        &eframe::wasm_bindgen::JsValue::from_str("returnValue"),
+                        &eframe::wasm_bindgen::JsValue::from_str("unsaved"),
+                    );
+                }) as Box<dyn FnMut(_)>);
+                // SAFETY: forgetting the closure is acceptable here; it lives for the page lifetime.
+                window.set_onbeforeunload(Some(closure.as_ref().unchecked_ref()));
+                closure.forget();
+            } else {
+                window.set_onbeforeunload(None);
+            }
+        }
+    }
+    /// Handles file-related keyboard shortcuts: New, Open, Save, Save As, and Quit.
+    /// Uses the platform-standard Command (macOS) or Control (Windows/Linux) modifier.
+    fn handle_file_shortcuts(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let is_editing_text = ctx.wants_keyboard_input();
+        if is_editing_text {
+            return;
+        }
+        let mut request_quit = false;
+        ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            let shift = i.modifiers.shift;
+            // Save As: Cmd/Ctrl+Shift+S
+            if i.key_pressed(egui::Key::S) && cmd && shift {
+                self.save_as_flowchart();
+            }
+            // Save: Cmd/Ctrl+S
+            else if i.key_pressed(egui::Key::S) && cmd {
+                self.save_flowchart();
+            }
+            // Open: Cmd/Ctrl+O
+            if i.key_pressed(egui::Key::O) && cmd {
+                if self.file.has_unsaved_changes {
+                    self.file.show_unsaved_dialog = true;
+                    self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
+                } else {
+                    self.load_flowchart();
+                }
+            }
+            // New: Cmd/Ctrl+N
+            if i.key_pressed(egui::Key::N) && cmd {
+                if self.file.has_unsaved_changes {
+                    self.file.show_unsaved_dialog = true;
+                    self.file.pending_confirm_action = Some(PendingConfirmAction::New);
+                } else {
+                    self.new_flowchart();
+                }
+            }
+            // Quit: Cmd/Ctrl+Q (native only)
+            #[cfg(not(target_arch = "wasm32"))]
+            if i.key_pressed(egui::Key::Q) && cmd {
+                if self.file.has_unsaved_changes {
+                    self.file.show_unsaved_dialog = true;
+                    self.file.pending_confirm_action = Some(PendingConfirmAction::Quit);
+                } else {
+                    request_quit = true;
+                }
+            }
+        });
+        if request_quit {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
     /// Handles undo/redo keyboard shortcuts.
     ///
     /// # Arguments
@@ -230,10 +381,20 @@ impl FlowchartApp {
         ui.horizontal(|ui| {
             // File operations
             if ui.button("New").clicked() {
-                self.new_flowchart();
+                if self.file.has_unsaved_changes {
+                    self.file.show_unsaved_dialog = true;
+                    self.file.pending_confirm_action = Some(PendingConfirmAction::New);
+                } else {
+                    self.new_flowchart();
+                }
             }
             if ui.button("Open").clicked() {
-                self.load_flowchart();
+                if self.file.has_unsaved_changes {
+                    self.file.show_unsaved_dialog = true;
+                    self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
+                } else {
+                    self.load_flowchart();
+                }
             }
             if ui.button("Save").clicked() {
                 self.save_flowchart();

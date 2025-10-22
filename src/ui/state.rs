@@ -188,6 +188,15 @@ pub struct FileState {
     pub file_operation_sender: Option<Sender<FileOperationResult>>,
     #[serde(skip)]
     pub file_operation_receiver: Option<Receiver<FileOperationResult>>,
+    /// Whether to show an unsaved-changes confirmation dialog
+    #[serde(skip)]
+    pub show_unsaved_dialog: bool,
+    /// The action the user attempted that requires confirmation (e.g., New or Quit)
+    #[serde(skip)]
+    pub pending_confirm_action: Option<PendingConfirmAction>,
+    /// One-shot flag to allow the next close request to proceed after user confirmation (native only)
+    #[serde(skip)]
+    pub allow_close_on_next_request: bool,
 }
 
 impl Default for FileState {
@@ -200,6 +209,9 @@ impl Default for FileState {
             pending_load_operation: None,
             file_operation_sender: Some(sender),
             file_operation_receiver: Some(receiver),
+            show_unsaved_dialog: false,
+            pending_confirm_action: None,
+            allow_close_on_next_request: false,
         }
     }
 }
@@ -229,6 +241,17 @@ pub enum FileOperationResult {
     LoadCompleted(String, String),
     /// Operation failed with an error message
     OperationFailed(String),
+}
+
+/// Pending confirmation actions that may require user approval due to unsaved changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingConfirmAction {
+    /// User is attempting to create a new file
+    New,
+    /// User is attempting to open a file
+    Open,
+    /// User is attempting to quit the application
+    Quit,
 }
 
 /// The main application structure containing UI state and the flowchart data.

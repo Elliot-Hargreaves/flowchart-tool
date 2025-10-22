@@ -4,6 +4,7 @@
 //! and WASM-compatible browser-based file operations.
 
 use super::state::{FileOperationResult, FlowchartApp, PendingLoadOperation, PendingSaveOperation};
+use crate::ui::UndoHistory;
 use crate::types::Flowchart;
 use eframe::egui;
 
@@ -36,6 +37,8 @@ impl FlowchartApp {
                                 self.interaction.editing_node_name = None;
                                 // Update node counter to avoid ID conflicts
                                 self.node_counter = self.flowchart.nodes.len() as u32;
+                                // Clear undo/redo history when opening a file
+                                self.undo_history = UndoHistory::new();
                                 println!("File loaded successfully");
                             }
                             Err(e) => {
