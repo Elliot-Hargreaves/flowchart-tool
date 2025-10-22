@@ -24,6 +24,8 @@ pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 use crate::types::*;
 use eframe::egui;
 use self::state::PendingConfirmAction;
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::JsCast;
 
 impl eframe::App for FlowchartApp {
     /// Main update function called by egui for each frame.
