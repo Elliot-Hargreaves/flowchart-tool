@@ -38,6 +38,10 @@ impl eframe::App for FlowchartApp {
     /// * `ctx` - The egui context
     /// * `frame` - The eframe frame
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Apply theme visuals
+        let visuals = if self.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
+        ctx.set_visuals(visuals);
+
         // Handle pending file operations
         self.handle_pending_operations(ctx);
 
@@ -76,12 +80,14 @@ impl eframe::App for FlowchartApp {
         }
 
         // Properties panel on the right side
+        let viewport_width = ctx.input(|i| i.screen_rect().width());
+        let default_prop_width = (viewport_width * 0.25).clamp(180.0, 600.0);
         egui::SidePanel::right("properties_panel")
-            .resizable(true)
-            .default_width(200.0)
-            .show(ctx, |ui| {
-                self.draw_properties_panel(ui);
-            });
+                    .resizable(true)
+                    .default_width(default_prop_width)
+                    .show(ctx, |ui| {
+                        self.draw_properties_panel(ui);
+                    });
 
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -479,6 +485,8 @@ impl FlowchartApp {
 
             // View options
             ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
+            ui.separator();
+            ui.checkbox(&mut self.dark_mode, "Dark Mode");
 
             ui.separator();
 

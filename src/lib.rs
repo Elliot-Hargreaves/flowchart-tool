@@ -55,9 +55,25 @@ use {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
-    let document = web_sys::window().unwrap().document().unwrap();
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
     let canvas = document.get_element_by_id(canvas_id).unwrap();
     let canvas: HtmlCanvasElement = canvas.dyn_into::<HtmlCanvasElement>().unwrap();
+
+    // Ensure a favicon is set for the web build
+    if let Some(head) = document.head() {
+        let link = document.create_element("link").unwrap();
+        link.set_attribute("rel", "icon").ok();
+        link.set_attribute("type", "image/svg+xml").ok();
+        // Simple inlined SVG circle icon
+        let svg = r#"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>
+<circle cx='32' cy='32' r='26' fill='#4287F5' stroke='#2a5db0' stroke-width='4'/>
+<path d='M20 28h24v8H20z' fill='white'/>
+</svg>"#;
+        let data_url = format!("data:image/svg+xml;utf8,{}", js_sys::encode_uri_component(svg));
+        link.set_attribute("href", &data_url).ok();
+        head.append_child(&link).ok();
+    }
 
     let options = eframe::WebOptions::default();
     eframe::WebRunner::new()
@@ -88,9 +104,37 @@ pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValu
 ///     run_app()
 /// }
 /// ```
+fn generate_app_icon() -> egui::IconData {
+    // Generate a simple 64x64 RGBA icon (blue circle on transparent background)
+    let size: usize = 64;
+    let mut rgba: Vec<u8> = vec![0; size * size * 4];
+    let center = (size as f32 - 1.0) / 2.0;
+    let radius = 24.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = (y * size + x) * 4;
+            if dist <= radius {
+                let edge = (radius - dist).clamp(0.0, 1.0);
+                rgba[idx] = 66;   // R
+                rgba[idx + 1] = 135; // G
+                rgba[idx + 2] = 245; // B
+                rgba[idx + 3] = (200.0 * edge + 55.0) as u8; // A
+            } else {
+                rgba[idx + 3] = 0; // transparent
+            }
+        }
+    }
+    egui::IconData { rgba, width: size as u32, height: size as u32 }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_app() -> Result<(), eframe::Error> {
-    let options = eframe::NativeOptions::default();
+    let icon = generate_app_icon();
+    let mut options = eframe::NativeOptions::default();
+    options.viewport = egui::ViewportBuilder::default().with_icon(icon);
     eframe::run_native(
         "Flowchart Tool",
         options,

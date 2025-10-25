@@ -288,6 +288,8 @@ pub struct FlowchartApp {
     pub frame_counter: u64,
     /// Undo/redo history for tracking and reversing actions
     pub undo_history: UndoHistory,
+    /// Whether dark mode visuals are enabled
+    pub dark_mode: bool,
 }
 
 impl Default for FlowchartApp {
@@ -305,6 +307,7 @@ impl Default for FlowchartApp {
             error_node: None,
             frame_counter: 0,
             undo_history: UndoHistory::new(),
+            dark_mode: true,
         }
     }
 }
