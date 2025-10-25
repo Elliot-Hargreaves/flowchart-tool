@@ -165,7 +165,8 @@ pub fn run_app() -> Result<(), eframe::Error> {
             if let Some(storage) = cc.storage {
                 if let Some(json) = storage.get_string("app_state") {
                     match FlowchartApp::from_json(&json) {
-                        Ok(app) => {
+                        Ok(mut app) => {
+                            app.reset_non_ui_fields();
                             eprintln!("Loaded app_state from storage (native)");
                             return Ok(Box::new(app));
                         }

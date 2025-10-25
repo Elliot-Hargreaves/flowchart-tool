@@ -354,4 +354,15 @@ impl FlowchartApp {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
+    
+    pub fn reset_non_ui_fields(&mut self) {
+        *self = Self {
+            properties_panel_width: self.properties_panel_width,
+            window_inner_size: self.window_inner_size,
+            applied_viewport_restore: self.applied_viewport_restore,
+            last_window_pos: self.last_window_pos,
+            dark_mode: self.dark_mode,
+            ..Default::default()
+        };
+    }
 }
