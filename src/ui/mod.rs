@@ -28,6 +28,18 @@ use self::state::PendingConfirmAction;
 use eframe::wasm_bindgen::JsCast;
 
 impl eframe::App for FlowchartApp {
+    /// Persist entire app state between restarts.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        match self.to_json() {
+            Ok(json) => {
+                storage.set_string("app_state", json);
+            }
+            Err(err) => {
+                eprintln!("Failed to serialize app state: {err}");
+            }
+        }
+    }
+
     /// Main update function called by egui for each frame.
     ///
     /// This method handles the overall UI layout, including the properties panel,
@@ -79,15 +91,38 @@ impl eframe::App for FlowchartApp {
             Self::update_beforeunload(self.file.has_unsaved_changes);
         }
 
+        // Restore native window size once per session (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.applied_viewport_restore {
+                if let Some((w, h)) = self.window_inner_size {
+                    // Apply stored inner size
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+                }
+                self.applied_viewport_restore = true;
+            }
+            // Capture current window inner size to persist on save
+            let size = ctx.input(|i| i.screen_rect().size());
+            self.window_inner_size = Some((size.x, size.y));
+        }
+
         // Properties panel on the right side
         let viewport_width = ctx.input(|i| i.screen_rect().width());
-        let default_prop_width = (viewport_width * 0.25).clamp(180.0, 600.0);
+        // Use remembered width when available, but clamp to viewport
+        let clamped_width = self
+            .properties_panel_width
+            .clamp(180.0, (viewport_width * 0.9).max(180.0));
         egui::SidePanel::right("properties_panel")
-                    .resizable(true)
-                    .default_width(default_prop_width)
-                    .show(ctx, |ui| {
-                        self.draw_properties_panel(ui);
-                    });
+            .resizable(true)
+            .default_width(clamped_width)
+            .show(ctx, |ui| {
+                // Capture the current width each frame so we can remember it
+                let current_width = ui.available_width();
+                // Only update if within viewport constraints
+                let max_allowed = (viewport_width * 0.9).max(180.0);
+                self.properties_panel_width = current_width.clamp(180.0, max_allowed);
+                self.draw_properties_panel(ui);
+            });
 
         // Main content area
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -965,29 +1000,39 @@ impl FlowchartApp {
                 ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
             }
             NodeType::Transformer { script, .. } => {
-                // Initialize temp value if empty
+                // Initialize temp value if empty or if out of sync with selected node
                 if self.interaction.temp_transformer_script.is_empty() {
                     self.interaction.temp_transformer_script = script.clone();
                 }
 
                 ui.label("JavaScript Script:");
 
+                // Determine a max height of ~50 lines based on monospace row height
+                let row_height = ui
+                    .text_style_height(&egui::TextStyle::Monospace)
+                    .max(12.0);
+                let max_height = row_height * 50.0 + 8.0; // small padding
+
                 // Store a reference for the layouter and a mutable copy for editing
                 let layouter_ref = self.interaction.temp_transformer_script.clone();
                 let mut layouter = rendering::create_js_layouter(&layouter_ref);
 
-                let text_edit_response = ui.add(
-                    egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
-                        .desired_rows(10)
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace)
-                        .lock_focus(true)
-                        .layouter(&mut layouter),
-                );
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .show(ui, |ui| {
+                        let text_edit_response = ui.add(
+                            egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
+                                .desired_rows(10)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace)
+                                .lock_focus(true)
+                                .layouter(&mut layouter),
+                        );
 
-                if text_edit_response.changed() {
-                    self.update_transformer_property(node.id, "script");
-                }
+                        if text_edit_response.changed() {
+                            self.update_transformer_property(node.id, "script");
+                        }
+                    });
 
                 // Show last script error if any
                 if let NodeState::Error(msg) = &node.state {

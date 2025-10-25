@@ -231,6 +231,9 @@ impl FlowchartApp {
             self.interaction.selected_nodes.push(node_id);
             self.interaction.selected_node = Some(node_id);
             self.interaction.selected_connection = None;
+            // Selection changed as part of starting a drag; clear temp editors so UI repopulates for the new node
+            self.interaction.editing_node_name = None;
+            self.clear_temp_editing_values();
         }
 
         // Prepare original positions for multi-drag undo

@@ -80,7 +80,26 @@ pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValu
         .start(
             canvas,
             options,
-            Box::new(|_cc| Ok(Box::new(FlowchartApp::default()))),
+            Box::new(|cc| {
+                if let Some(storage) = cc.storage {
+                    if let Some(json) = storage.get_string("app_state") {
+                        match FlowchartApp::from_json(&json) {
+                            Ok(app) => {
+                                eprintln!("Loaded app_state from storage (web)");
+                                return Ok(Box::new(app));
+                            }
+                            Err(err) => {
+                                eprintln!("Failed to parse app_state (web): {err}");
+                            }
+                        }
+                    } else {
+                        eprintln!("No app_state found in storage (web)");
+                    }
+                } else {
+                    eprintln!("No storage available (web)");
+                }
+                Ok(Box::new(FlowchartApp::default()))
+            }),
         )
         .await?;
     Ok(())
@@ -134,11 +153,32 @@ fn generate_app_icon() -> egui::IconData {
 pub fn run_app() -> Result<(), eframe::Error> {
     let icon = generate_app_icon();
     let mut options = eframe::NativeOptions::default();
-    options.viewport = egui::ViewportBuilder::default().with_icon(icon);
+    options.viewport = egui::ViewportBuilder::default()
+        .with_app_id("flowchart_tool")
+        .with_icon(icon);
     eframe::run_native(
         "Flowchart Tool",
         options,
-        Box::new(|_cc| Ok(Box::new(FlowchartApp::default()))),
+        Box::new(|cc| {
+            if let Some(storage) = cc.storage {
+                if let Some(json) = storage.get_string("app_state") {
+                    match FlowchartApp::from_json(&json) {
+                        Ok(app) => {
+                            eprintln!("Loaded app_state from storage (native)");
+                            return Ok(Box::new(app));
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to parse app_state (native): {err}");
+                        }
+                    }
+                } else {
+                    eprintln!("No app_state found in storage (native)");
+                }
+            } else {
+                eprintln!("No storage available (native)");
+            }
+            Ok(Box::new(FlowchartApp::default()))
+        }),
     )
 }
 

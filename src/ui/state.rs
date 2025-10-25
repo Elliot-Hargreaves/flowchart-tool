@@ -15,6 +15,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 ///
 /// Tracks the current pan offset, zoom level, and display options for the canvas.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct CanvasState {
     /// Current canvas pan offset for navigation (in screen space)
     #[serde(skip)]
@@ -39,6 +40,7 @@ impl Default for CanvasState {
 ///
 /// Tracks selection, dragging, editing, and connection drawing operations.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct InteractionState {
     /// Currently selected node ID, if any (kept for backward compatibility when exactly one node is selected)
     #[serde(skip)]
@@ -141,6 +143,7 @@ impl Default for InteractionState {
 ///
 /// Manages the right-click context menu for creating new nodes.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct ContextMenuState {
     /// Whether the context menu is currently visible
     #[serde(skip)]
@@ -171,6 +174,7 @@ impl Default for ContextMenuState {
 ///
 /// Manages file paths, unsaved changes tracking, and async file operations.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct FileState {
     /// Current file path for save/load operations
     #[serde(skip)]
@@ -259,6 +263,7 @@ pub enum PendingConfirmAction {
 /// This struct implements the `eframe::App` trait and handles all user interface
 /// rendering and interaction logic.
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 pub struct FlowchartApp {
     /// The flowchart being edited and simulated
     pub flowchart: Flowchart,
@@ -290,6 +295,17 @@ pub struct FlowchartApp {
     pub undo_history: UndoHistory,
     /// Whether dark mode visuals are enabled
     pub dark_mode: bool,
+    /// Remembered width of the properties panel across sessions
+    pub properties_panel_width: f32,
+    /// Persisted last known window inner size in logical points (desktop only)
+    /// Stored as a simple tuple to avoid depending on serde for egui types
+    pub window_inner_size: Option<(f32, f32)>,
+    /// Last known window position (desktop only)
+    #[serde(skip)]
+    pub last_window_pos: Option<egui::Pos2>,
+    /// Whether we've already applied the stored window geometry this session
+    #[serde(skip)]
+    pub applied_viewport_restore: bool,
 }
 
 impl Default for FlowchartApp {
@@ -308,6 +324,10 @@ impl Default for FlowchartApp {
             frame_counter: 0,
             undo_history: UndoHistory::new(),
             dark_mode: true,
+            properties_panel_width: 300.0,
+            window_inner_size: None,
+            last_window_pos: None,
+            applied_viewport_restore: false,
         }
     }
 }
