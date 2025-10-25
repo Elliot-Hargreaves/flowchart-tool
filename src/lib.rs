@@ -84,7 +84,8 @@ pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValu
                 if let Some(storage) = cc.storage {
                     if let Some(json) = storage.get_string("app_state") {
                         match FlowchartApp::from_json(&json) {
-                            Ok(app) => {
+                            Ok(mut app) => {
+                                app.reset_non_ui_fields();
                                 eprintln!("Loaded app_state from storage (web)");
                                 return Ok(Box::new(app));
                             }
