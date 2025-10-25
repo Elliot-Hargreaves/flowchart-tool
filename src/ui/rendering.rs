@@ -577,7 +577,7 @@ pub fn create_js_layouter(
 ) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
     move |ui: &egui::Ui, _text: &dyn egui::TextBuffer, wrap_width: f32| {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-        let mut layout_job = highlighters::highlight_javascript(temp_script, font_id);
+        let mut layout_job = highlighters::highlight_javascript(temp_script, font_id, ui.visuals().dark_mode);
         layout_job.wrap.max_width = wrap_width;
         ui.fonts(|f| f.layout_job(layout_job))
     }
@@ -597,7 +597,7 @@ pub fn create_json_layouter(
 ) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> std::sync::Arc<egui::Galley> + '_ {
     move |ui: &egui::Ui, _text: &dyn egui::TextBuffer, wrap_width: f32| {
         let font_id = egui::TextStyle::Monospace.resolve(ui.style());
-        let mut layout_job = highlighters::highlight_json(temp_json, font_id);
+        let mut layout_job = highlighters::highlight_json(temp_json, font_id, ui.visuals().dark_mode);
         layout_job.wrap.max_width = wrap_width;
         ui.fonts(|f| f.layout_job(layout_job))
     }

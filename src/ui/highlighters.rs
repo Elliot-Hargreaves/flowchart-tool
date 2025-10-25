@@ -16,16 +16,29 @@ use eframe::epaint::text::{LayoutJob, TextFormat};
 /// # Returns
 ///
 /// A `LayoutJob` containing the highlighted text with appropriate colors
-pub fn highlight_javascript(text: &str, font_id: egui::FontId) -> LayoutJob {
+pub fn highlight_javascript(text: &str, font_id: egui::FontId, dark_mode: bool) -> LayoutJob {
     let mut job = LayoutJob::default();
 
-    // Define colors for different token types
-    let keyword_color = Color32::from_rgb(86, 156, 214); // Blue
-    let string_color = Color32::from_rgb(206, 145, 120); // Orange
-    let comment_color = Color32::from_rgb(106, 153, 85); // Green
-    let number_color = Color32::from_rgb(181, 206, 168); // Light green
-    let function_color = Color32::from_rgb(220, 220, 170); // Yellow
-    let default_color = Color32::from_rgb(212, 212, 212); // Light gray
+    // Define colors for different token types, adjusting for dark/light mode
+    let (keyword_color, string_color, comment_color, number_color, function_color, default_color) = if dark_mode {
+        (
+            Color32::from_rgb(86, 156, 214),   // Blue
+            Color32::from_rgb(206, 145, 120),  // Orange
+            Color32::from_rgb(106, 153, 85),   // Green
+            Color32::from_rgb(181, 206, 168),  // Light green
+            Color32::from_rgb(220, 220, 170),  // Yellow
+            Color32::from_rgb(212, 212, 212),  // Light gray (default)
+        )
+    } else {
+        (
+            Color32::from_rgb(0, 0, 170),      // Dark blue for keywords
+            Color32::from_rgb(163, 21, 21),    // Dark red/brown for strings
+            Color32::from_rgb(0, 128, 0),      // Dark green for comments
+            Color32::from_rgb(100, 0, 150),    // Purple for numbers
+            Color32::from_rgb(0, 102, 153),    // Dark teal for function names
+            Color32::BLACK,                    // Black default text on light bg
+        )
+    };
 
     let keywords = [
         "function",
@@ -215,15 +228,27 @@ pub fn highlight_javascript(text: &str, font_id: egui::FontId) -> LayoutJob {
 /// # Returns
 ///
 /// A `LayoutJob` containing the highlighted text with appropriate colors
-pub fn highlight_json(text: &str, font_id: egui::FontId) -> LayoutJob {
+pub fn highlight_json(text: &str, font_id: egui::FontId, dark_mode: bool) -> LayoutJob {
     let mut job = LayoutJob::default();
 
-    // Define colors for different token types
-    let string_color = Color32::from_rgb(206, 145, 120); // Orange
-    let number_color = Color32::from_rgb(181, 206, 168); // Light green
-    let keyword_color = Color32::from_rgb(86, 156, 214); // Blue (for true/false/null)
-    let key_color = Color32::from_rgb(156, 220, 254); // Light blue (for object keys)
-    let default_color = Color32::from_rgb(212, 212, 212); // Light gray
+    // Define colors for different token types, adjusting for dark/light mode
+    let (string_color, number_color, keyword_color, key_color, default_color) = if dark_mode {
+        (
+            Color32::from_rgb(206, 145, 120), // Orange
+            Color32::from_rgb(181, 206, 168), // Light green
+            Color32::from_rgb(86, 156, 214),  // Blue (for true/false/null)
+            Color32::from_rgb(156, 220, 254), // Light blue (for object keys)
+            Color32::from_rgb(212, 212, 212), // Light gray
+        )
+    } else {
+        (
+            Color32::from_rgb(163, 21, 21),   // Dark red/brown for strings
+            Color32::from_rgb(100, 0, 150),   // Purple for numbers
+            Color32::from_rgb(0, 0, 170),     // Dark blue for true/false/null
+            Color32::from_rgb(0, 102, 204),   // Strong blue for object keys
+            Color32::BLACK,                   // Black default text
+        )
+    };
 
     let mut chars = text.char_indices().peekable();
     let mut in_key_position = false; // Track if we're expecting an object key
