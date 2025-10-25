@@ -106,12 +106,19 @@ impl eframe::App for FlowchartApp {
             self.window_inner_size = Some((size.x, size.y));
         }
 
-        // Properties panel on the right side
+        // Top toolbar occupies full width and is independent of the properties panel
+        egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
+            self.draw_toolbar(ui);
+        });
+
+        // Properties panel should only take space from the canvas area below the toolbar
         let viewport_width = ctx.input(|i| i.screen_rect().width());
         // Use remembered width when available, but clamp to viewport
         let clamped_width = self
             .properties_panel_width
             .clamp(180.0, (viewport_width * 0.9).max(180.0));
+
+        // Right-side properties panel lives alongside the canvas (below the toolbar)
         egui::SidePanel::right("properties_panel")
             .resizable(true)
             .default_width(clamped_width)
@@ -124,16 +131,10 @@ impl eframe::App for FlowchartApp {
                 self.draw_properties_panel(ui);
             });
 
-        // Main content area
+        // Central canvas area (below the toolbar)
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical(|ui| {
-                // Toolbar at the top
-                self.draw_toolbar(ui);
-                ui.separator();
-
-                // Canvas takes remaining space
-                self.draw_canvas(ui);
-            });
+            // Canvas takes remaining space
+            self.draw_canvas(ui);
         });
 
         // Unsaved changes confirmation dialog

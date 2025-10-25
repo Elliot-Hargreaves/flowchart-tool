@@ -155,7 +155,9 @@ pub fn run_app() -> Result<(), eframe::Error> {
     let mut options = eframe::NativeOptions::default();
     options.viewport = egui::ViewportBuilder::default()
         .with_app_id("flowchart_tool")
-        .with_icon(icon);
+        .with_icon(icon)
+        // Default window size tuned for 1080p displays (leaves room for taskbar)
+        .with_inner_size(egui::vec2(1720.0, 980.0));
     eframe::run_native(
         "Flowchart Tool",
         options,
