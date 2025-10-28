@@ -17,6 +17,35 @@ mod highlighters;
 mod rendering;
 mod state;
 mod undo;
+mod editor;
+
+#[cfg(target_arch = "wasm32")]
+use web_sys;
+
+fn is_macos_platform() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(win) = web_sys::window() {
+            let nav = win.navigator();
+            let platform = nav.platform();
+            if let Ok(platform) = platform {
+                if platform.contains("Mac") {
+                    return true;
+                }
+            }
+            if let Ok(ua) = nav.user_agent() {
+                if ua.contains("Mac OS X") || ua.contains("Macintosh") || ua.contains("Mac OS") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cfg!(target_os = "macos")
+    }
+}
 
 pub use state::FlowchartApp;
 pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
@@ -24,6 +53,7 @@ pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 use crate::types::*;
 use eframe::egui;
 use self::state::PendingConfirmAction;
+use self::editor::{handle_code_textedit_keys, CodeEditOptions, LanguageKind, simple_js_format};
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
 
@@ -977,25 +1007,38 @@ impl FlowchartApp {
                         .layouter(&mut layouter),
                 );
 
-                // Handle Tab key to insert 4 spaces
-                if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-                    // Get cursor position from text edit state
-                    let cursor_pos = ui
-                        .memory(|mem| {
-                            mem.data
-                                .get_temp::<egui::text_edit::TextEditState>(text_edit_response.id)
-                                .and_then(|state| state.cursor.char_range())
-                                .map(|range| range.primary.index)
-                        })
-                        .unwrap_or(self.interaction.temp_producer_message_template.len());
+                let mut edited = false;
 
-                    self.interaction
-                        .temp_producer_message_template
-                        .insert_str(cursor_pos, "    ");
-                    self.update_producer_property(node.id, "message_template");
-                } else if text_edit_response.changed() {
+                // Enhanced editing: Tab/Shift+Tab indentation and Enter indentation
+                let opts = CodeEditOptions { language: LanguageKind::Json, indent: "    " };
+                if handle_code_textedit_keys(ui, &text_edit_response, &mut self.interaction.temp_producer_message_template, &opts) {
+                    edited = true;
+                }
+
+                // Pretty‑format JSON on Ctrl+Shift+F (or Cmd+Shift+F)
+                let format_shortcut = ui.input(|i| {
+                    (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift && i.key_pressed(egui::Key::F)
+                });
+                if text_edit_response.has_focus() && format_shortcut {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.interaction.temp_producer_message_template) {
+                        if let Ok(pretty) = serde_json::to_string_pretty(&value) {
+                            self.interaction.temp_producer_message_template = pretty;
+                            edited = true;
+                        }
+                    }
+                }
+
+                if edited || text_edit_response.changed() {
                     self.update_producer_property(node.id, "message_template");
                 }
+
+                // Hint: formatting shortcut
+                let hint = if is_macos_platform() {
+                    "Tip: Press Cmd+Shift+F to format JSON."
+                } else {
+                    "Tip: Press Ctrl+Shift+F to format JSON."
+                };
+                ui.add(egui::Label::new(egui::RichText::new(hint).small().italics()).wrap());
             }
             NodeType::Consumer { consumption_rate } => {
                 ui.label(format!("Consumption Rate: {} msg/step", consumption_rate));
@@ -1030,9 +1073,35 @@ impl FlowchartApp {
                                 .layouter(&mut layouter),
                         );
 
-                        if text_edit_response.changed() {
+                        let mut edited = false;
+                        let opts = CodeEditOptions { language: LanguageKind::JavaScript, indent: "    " };
+                        if handle_code_textedit_keys(ui, &text_edit_response, &mut self.interaction.temp_transformer_script, &opts) {
+                            edited = true;
+                        }
+
+                        // JS pretty format on Ctrl/Cmd+Shift+F
+                        let js_format_shortcut = ui.input(|i| {
+                            (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift && i.key_pressed(egui::Key::F)
+                        });
+                        if text_edit_response.has_focus() && js_format_shortcut {
+                            let formatted = simple_js_format(&self.interaction.temp_transformer_script, opts.indent);
+                            if formatted != self.interaction.temp_transformer_script {
+                                self.interaction.temp_transformer_script = formatted;
+                                edited = true;
+                            }
+                        }
+
+                        if edited || text_edit_response.changed() {
                             self.update_transformer_property(node.id, "script");
                         }
+
+                        // Hint: formatting shortcut
+                        let hint = if is_macos_platform() {
+                            "Tip: Press Cmd+Shift+F to format JavaScript."
+                        } else {
+                            "Tip: Press Ctrl+Shift+F to format JavaScript."
+                        };
+                        ui.add(egui::Label::new(egui::RichText::new(hint).small().italics()).wrap());
                     });
 
                 // Show last script error if any
