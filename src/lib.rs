@@ -127,6 +127,7 @@ pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValu
 ///     run_app()
 /// }
 /// ```
+#[cfg(not(target_arch = "wasm32"))]
 fn generate_app_icon() -> egui::IconData {
     // Generate a simple 64x64 RGBA icon (blue circle on transparent background)
     let size: usize = 64;

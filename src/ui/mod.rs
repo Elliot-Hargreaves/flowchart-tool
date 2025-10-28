@@ -285,6 +285,9 @@ impl FlowchartApp {
         if is_editing_text {
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        let request_quit = false;
+        #[cfg(not(target_arch = "wasm32"))]
         let mut request_quit = false;
         ctx.input(|i| {
             let cmd = i.modifiers.command;

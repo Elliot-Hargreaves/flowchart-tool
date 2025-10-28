@@ -138,6 +138,7 @@ impl FlowchartApp {
 
                         #[cfg(target_arch = "wasm32")]
                         {
+                            println!("Would have safed to {path}");
                             // For WASM, we can't "save" to a previous path without user interaction
                             // Fall back to Save As
                             self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
@@ -240,8 +241,8 @@ impl FlowchartApp {
         let blob_parts = js_sys::Array::new();
         blob_parts.push(&crate::wasm_bindgen::JsValue::from_str(content));
 
-        let mut blob_options = web_sys::BlobPropertyBag::new();
-        blob_options.type_("application/json");
+        let blob_options = web_sys::BlobPropertyBag::new();
+        blob_options.set_type("application/json");
 
         let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_options)
             .map_err(|_| "Failed to create blob")?;
