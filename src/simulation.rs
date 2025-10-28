@@ -246,22 +246,26 @@ impl SimulationEngine {
                     node.state = NodeState::Processing;
                     Ok(())
                 }
-                NodeType::Transformer { script, selected_outputs: _ } => {
+                NodeType::Transformer {
+                    script,
+                    selected_outputs: _,
+                } => {
                     // Execute JavaScript to transform the message
                     node.state = NodeState::Processing;
                     let script = script.clone();
 
                     // Execute the transformation script
-                    let mut transformed_messages = match execute_transformer_script(&script, &message) {
-                        Ok(msgs) => msgs,
-                        Err(err) => {
-                            // Record error state on the node and propagate the error
-                            if let Some(n) = flowchart.nodes.get_mut(&node_id) {
-                                n.state = NodeState::Error(err.clone());
+                    let mut transformed_messages =
+                        match execute_transformer_script(&script, &message) {
+                            Ok(msgs) => msgs,
+                            Err(err) => {
+                                // Record error state on the node and propagate the error
+                                if let Some(n) = flowchart.nodes.get_mut(&node_id) {
+                                    n.state = NodeState::Error(err.clone());
+                                }
+                                return Err(err);
                             }
-                            return Err(err);
-                        }
-                    };
+                        };
 
                     // Programmatic routing: each output message may include a special "__targets" field
                     // which is an array of destination node names. If absent or null, broadcast to all.
@@ -270,7 +274,8 @@ impl SimulationEngine {
                         let mut routing_targets: Option<Vec<String>> = None; // None = broadcast
                         if let serde_json::Value::Object(ref mut map) = transformed_message.data {
                             if map.contains_key("__targets") {
-                                let raw = map.remove("__targets").unwrap_or(serde_json::Value::Null);
+                                let raw =
+                                    map.remove("__targets").unwrap_or(serde_json::Value::Null);
                                 match raw {
                                     serde_json::Value::Null => {
                                         routing_targets = None; // broadcast
@@ -699,7 +704,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod programmatic_routing_tests {
     use super::*;
@@ -732,7 +736,9 @@ mod programmatic_routing_tests {
         let c1 = FlowchartNode::new(
             "C1".to_string(),
             (150.0, 0.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let c1_id = c1.id;
         flowchart.add_node(c1);
@@ -740,7 +746,9 @@ mod programmatic_routing_tests {
         let c2 = FlowchartNode::new(
             "C2".to_string(),
             (150.0, 100.0),
-            NodeType::Consumer { consumption_rate: 1 },
+            NodeType::Consumer {
+                consumption_rate: 1,
+            },
         );
         let c2_id = c2.id;
         flowchart.add_node(c2);

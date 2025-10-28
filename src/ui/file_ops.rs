@@ -4,8 +4,8 @@
 //! and WASM-compatible browser-based file operations.
 
 use super::state::{FileOperationResult, FlowchartApp, PendingLoadOperation, PendingSaveOperation};
-use crate::ui::UndoHistory;
 use crate::types::Flowchart;
+use crate::ui::UndoHistory;
 use eframe::egui;
 
 impl FlowchartApp {

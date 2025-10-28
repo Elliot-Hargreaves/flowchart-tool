@@ -12,12 +12,12 @@
 //! - `rendering` - Drawing nodes, connections, grid, and UI elements
 
 mod canvas;
+mod editor;
 mod file_ops;
 mod highlighters;
 mod rendering;
 mod state;
 mod undo;
-mod editor;
 
 #[cfg(target_arch = "wasm32")]
 use web_sys;
@@ -50,10 +50,10 @@ fn is_macos_platform() -> bool {
 pub use state::FlowchartApp;
 pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
+use self::editor::{handle_code_textedit_keys, simple_js_format, CodeEditOptions, LanguageKind};
+use self::state::PendingConfirmAction;
 use crate::types::*;
 use eframe::egui;
-use self::state::PendingConfirmAction;
-use self::editor::{handle_code_textedit_keys, CodeEditOptions, LanguageKind, simple_js_format};
 #[cfg(target_arch = "wasm32")]
 use eframe::wasm_bindgen::JsCast;
 
@@ -81,7 +81,11 @@ impl eframe::App for FlowchartApp {
     /// * `frame` - The eframe frame
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // Apply theme visuals
-        let visuals = if self.dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
+        let visuals = if self.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
         ctx.set_visuals(visuals);
 
         // Handle pending file operations
@@ -254,15 +258,18 @@ impl FlowchartApp {
     fn update_beforeunload(has_unsaved_changes: bool) {
         if let Some(window) = web_sys::window() {
             if has_unsaved_changes {
-                let closure = eframe::wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::Event| {
-                    event.prevent_default();
-                    // Set returnValue to trigger the confirmation dialog in some browsers
-                    let _ = js_sys::Reflect::set(
-                        event.as_ref(),
-                        &eframe::wasm_bindgen::JsValue::from_str("returnValue"),
-                        &eframe::wasm_bindgen::JsValue::from_str("unsaved"),
-                    );
-                }) as Box<dyn FnMut(_)>);
+                let closure = eframe::wasm_bindgen::closure::Closure::wrap(Box::new(
+                    move |event: web_sys::Event| {
+                        event.prevent_default();
+                        // Set returnValue to trigger the confirmation dialog in some browsers
+                        let _ = js_sys::Reflect::set(
+                            event.as_ref(),
+                            &eframe::wasm_bindgen::JsValue::from_str("returnValue"),
+                            &eframe::wasm_bindgen::JsValue::from_str("unsaved"),
+                        );
+                    },
+                )
+                    as Box<dyn FnMut(_)>);
                 // SAFETY: forgetting the closure is acceptable here; it lives for the page lifetime.
                 window.set_onbeforeunload(Some(closure.as_ref().unchecked_ref()));
                 closure.forget();
@@ -383,13 +390,19 @@ impl FlowchartApp {
                 }
 
                 // Record combined undo action
-                self.undo_history.push_action(UndoAction::MultipleNodesDeleted { nodes: nodes.clone(), connections: connections.clone() });
+                self.undo_history
+                    .push_action(UndoAction::MultipleNodesDeleted {
+                        nodes: nodes.clone(),
+                        connections: connections.clone(),
+                    });
 
                 // Perform deletion
                 for id in &self.interaction.selected_nodes {
                     self.flowchart.nodes.remove(id);
                 }
-                self.flowchart.connections.retain(|c| !selected_set.contains(&c.from) && !selected_set.contains(&c.to));
+                self.flowchart
+                    .connections
+                    .retain(|c| !selected_set.contains(&c.from) && !selected_set.contains(&c.to));
 
                 // Clear selection
                 self.interaction.selected_nodes.clear();
@@ -893,8 +906,19 @@ impl FlowchartApp {
                     // Only record undo if script actually changed
                     if script != &new_script {
                         let old_node_type = node.node_type.clone();
-                        let selected_outputs = if let NodeType::Transformer { selected_outputs, .. } = &node.node_type { selected_outputs.clone() } else { None };
-                        let new_node_type = NodeType::Transformer { script: new_script, selected_outputs };
+                        let selected_outputs = if let NodeType::Transformer {
+                            selected_outputs,
+                            ..
+                        } = &node.node_type
+                        {
+                            selected_outputs.clone()
+                        } else {
+                            None
+                        };
+                        let new_node_type = NodeType::Transformer {
+                            script: new_script,
+                            selected_outputs,
+                        };
 
                         // Record undo action
                         self.undo_history.push_action(UndoAction::PropertyChanged {
@@ -1010,17 +1034,29 @@ impl FlowchartApp {
                 let mut edited = false;
 
                 // Enhanced editing: Tab/Shift+Tab indentation and Enter indentation
-                let opts = CodeEditOptions { language: LanguageKind::Json, indent: "    " };
-                if handle_code_textedit_keys(ui, &text_edit_response, &mut self.interaction.temp_producer_message_template, &opts) {
+                let opts = CodeEditOptions {
+                    language: LanguageKind::Json,
+                    indent: "    ",
+                };
+                if handle_code_textedit_keys(
+                    ui,
+                    &text_edit_response,
+                    &mut self.interaction.temp_producer_message_template,
+                    &opts,
+                ) {
                     edited = true;
                 }
 
                 // Pretty‑format JSON on Ctrl+Shift+F (or Cmd+Shift+F)
                 let format_shortcut = ui.input(|i| {
-                    (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift && i.key_pressed(egui::Key::F)
+                    (i.modifiers.ctrl || i.modifiers.command)
+                        && i.modifiers.shift
+                        && i.key_pressed(egui::Key::F)
                 });
                 if text_edit_response.has_focus() && format_shortcut {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.interaction.temp_producer_message_template) {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(
+                        &self.interaction.temp_producer_message_template,
+                    ) {
                         if let Ok(pretty) = serde_json::to_string_pretty(&value) {
                             self.interaction.temp_producer_message_template = pretty;
                             edited = true;
@@ -1052,9 +1088,7 @@ impl FlowchartApp {
                 ui.label("JavaScript Script:");
 
                 // Determine a max height of ~50 lines based on monospace row height
-                let row_height = ui
-                    .text_style_height(&egui::TextStyle::Monospace)
-                    .max(12.0);
+                let row_height = ui.text_style_height(&egui::TextStyle::Monospace).max(12.0);
                 let max_height = row_height * 50.0 + 8.0; // small padding
 
                 // Store a reference for the layouter and a mutable copy for editing
@@ -1065,26 +1099,41 @@ impl FlowchartApp {
                     .max_height(max_height)
                     .show(ui, |ui| {
                         let text_edit_response = ui.add(
-                            egui::TextEdit::multiline(&mut self.interaction.temp_transformer_script)
-                                .desired_rows(10)
-                                .desired_width(f32::INFINITY)
-                                .font(egui::TextStyle::Monospace)
-                                .lock_focus(true)
-                                .layouter(&mut layouter),
+                            egui::TextEdit::multiline(
+                                &mut self.interaction.temp_transformer_script,
+                            )
+                            .desired_rows(10)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace)
+                            .lock_focus(true)
+                            .layouter(&mut layouter),
                         );
 
                         let mut edited = false;
-                        let opts = CodeEditOptions { language: LanguageKind::JavaScript, indent: "    " };
-                        if handle_code_textedit_keys(ui, &text_edit_response, &mut self.interaction.temp_transformer_script, &opts) {
+                        let opts = CodeEditOptions {
+                            language: LanguageKind::JavaScript,
+                            indent: "    ",
+                        };
+                        if handle_code_textedit_keys(
+                            ui,
+                            &text_edit_response,
+                            &mut self.interaction.temp_transformer_script,
+                            &opts,
+                        ) {
                             edited = true;
                         }
 
                         // JS pretty format on Ctrl/Cmd+Shift+F
                         let js_format_shortcut = ui.input(|i| {
-                            (i.modifiers.ctrl || i.modifiers.command) && i.modifiers.shift && i.key_pressed(egui::Key::F)
+                            (i.modifiers.ctrl || i.modifiers.command)
+                                && i.modifiers.shift
+                                && i.key_pressed(egui::Key::F)
                         });
                         if text_edit_response.has_focus() && js_format_shortcut {
-                            let formatted = simple_js_format(&self.interaction.temp_transformer_script, opts.indent);
+                            let formatted = simple_js_format(
+                                &self.interaction.temp_transformer_script,
+                                opts.indent,
+                            );
                             if formatted != self.interaction.temp_transformer_script {
                                 self.interaction.temp_transformer_script = formatted;
                                 edited = true;
@@ -1101,7 +1150,9 @@ impl FlowchartApp {
                         } else {
                             "Tip: Press Ctrl+Shift+F to format JavaScript."
                         };
-                        ui.add(egui::Label::new(egui::RichText::new(hint).small().italics()).wrap());
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(hint).small().italics()).wrap(),
+                        );
                     });
 
                 // Show last script error if any
@@ -1109,7 +1160,6 @@ impl FlowchartApp {
                     ui.separator();
                     ui.colored_label(egui::Color32::RED, format!("Script error: {}", msg));
                 }
-
             }
         }
     }
@@ -1432,12 +1482,12 @@ impl FlowchartApp {
     }
 
     /// Automatically organizes nodes using a force-directed layout algorithm.
-    /// 
+    ///
     /// This method applies forces to nodes to create an aesthetically pleasing layout:
     /// - Repulsion between all nodes (to prevent overlap)
     /// - Attraction along connections (to keep connected nodes together)
     /// - Centers the final layout around the origin (0, 0)
-    /// 
+    ///
     /// The algorithm accounts for node size (100x70) and adds extra spacing
     /// to ensure connections are visible between nodes.
     fn auto_layout_graph(&mut self) {
@@ -1466,8 +1516,8 @@ impl FlowchartApp {
 
         // Calculate minimum safe distance between node centers
         // Using diagonal distance plus buffer for more natural spacing
-        let min_distance: f32 = (NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT).sqrt()
-            + SPACING_BUFFER * 2.0;
+        let min_distance: f32 =
+            (NODE_WIDTH * NODE_WIDTH + NODE_HEIGHT * NODE_HEIGHT).sqrt() + SPACING_BUFFER * 2.0;
 
         // Initialize velocities for all nodes
         let mut velocities: std::collections::HashMap<NodeId, (f32, f32)> =
@@ -1494,8 +1544,10 @@ impl FlowchartApp {
                     let id1 = node_ids[i];
                     let id2 = node_ids[j];
 
-                    if let (Some(node1), Some(node2)) = 
-                        (self.flowchart.nodes.get(&id1), self.flowchart.nodes.get(&id2)) {
+                    if let (Some(node1), Some(node2)) = (
+                        self.flowchart.nodes.get(&id1),
+                        self.flowchart.nodes.get(&id2),
+                    ) {
                         let dx = node1.position.0 - node2.position.0;
                         let dy = node1.position.1 - node2.position.1;
                         let distance = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -1593,10 +1645,11 @@ impl FlowchartApp {
             .collect();
 
         // Record undo action for the layout operation
-        self.undo_history.push_action(UndoAction::MultipleNodesMoved {
-            old_positions,
-            new_positions,
-        });
+        self.undo_history
+            .push_action(UndoAction::MultipleNodesMoved {
+                old_positions,
+                new_positions,
+            });
 
         self.file.has_unsaved_changes = true;
     }

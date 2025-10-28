@@ -190,10 +190,11 @@ impl FlowchartApp {
                         }
                     }
                     if !old_positions.is_empty() && old_positions != new_positions {
-                        self.undo_history.push_action(UndoAction::MultipleNodesMoved {
-                            old_positions,
-                            new_positions,
-                        });
+                        self.undo_history
+                            .push_action(UndoAction::MultipleNodesMoved {
+                                old_positions,
+                                new_positions,
+                            });
                         self.file.has_unsaved_changes = true;
                     }
                 } else if let Some(old_pos) = self.interaction.drag_original_position {
@@ -226,7 +227,7 @@ impl FlowchartApp {
         self.interaction.drag_start_pos = Some(current_pos);
 
         // Ensure selection includes the dragged node; if no multi-selection, select only this node
-        if !self.interaction.selected_nodes.iter().any(|&id| id == node_id) {
+        if !self.interaction.selected_nodes.contains(&node_id) {
             self.interaction.selected_nodes.clear();
             self.interaction.selected_nodes.push(node_id);
             self.interaction.selected_node = Some(node_id);
@@ -277,7 +278,10 @@ impl FlowchartApp {
 
         // Compute delta to apply to all selected nodes if multi-drag
         if let Some(dragged_node) = self.flowchart.nodes.get(&node_id).cloned() {
-            let delta = egui::vec2(new_world_pos.x - dragged_node.position.0, new_world_pos.y - dragged_node.position.1);
+            let delta = egui::vec2(
+                new_world_pos.x - dragged_node.position.0,
+                new_world_pos.y - dragged_node.position.1,
+            );
             if self.interaction.selected_nodes.len() > 1 {
                 for id in self.interaction.selected_nodes.clone() {
                     if let Some(n) = self.flowchart.nodes.get_mut(&id) {

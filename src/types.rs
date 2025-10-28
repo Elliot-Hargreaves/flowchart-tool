@@ -325,7 +325,8 @@ mod tests {
         );
 
         if let NodeType::Transformer {
-            script: node_script, ..
+            script: node_script,
+            ..
         } = &node.node_type
         {
             assert_eq!(*node_script, script);

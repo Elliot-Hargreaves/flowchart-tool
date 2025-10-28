@@ -20,25 +20,26 @@ pub fn highlight_javascript(text: &str, font_id: egui::FontId, dark_mode: bool) 
     let mut job = LayoutJob::default();
 
     // Define colors for different token types, adjusting for dark/light mode
-    let (keyword_color, string_color, comment_color, number_color, function_color, default_color) = if dark_mode {
-        (
-            Color32::from_rgb(86, 156, 214),   // Blue
-            Color32::from_rgb(206, 145, 120),  // Orange
-            Color32::from_rgb(106, 153, 85),   // Green
-            Color32::from_rgb(181, 206, 168),  // Light green
-            Color32::from_rgb(220, 220, 170),  // Yellow
-            Color32::from_rgb(212, 212, 212),  // Light gray (default)
-        )
-    } else {
-        (
-            Color32::from_rgb(0, 0, 170),      // Dark blue for keywords
-            Color32::from_rgb(163, 21, 21),    // Dark red/brown for strings
-            Color32::from_rgb(0, 128, 0),      // Dark green for comments
-            Color32::from_rgb(100, 0, 150),    // Purple for numbers
-            Color32::from_rgb(0, 102, 153),    // Dark teal for function names
-            Color32::BLACK,                    // Black default text on light bg
-        )
-    };
+    let (keyword_color, string_color, comment_color, number_color, function_color, default_color) =
+        if dark_mode {
+            (
+                Color32::from_rgb(86, 156, 214),  // Blue
+                Color32::from_rgb(206, 145, 120), // Orange
+                Color32::from_rgb(106, 153, 85),  // Green
+                Color32::from_rgb(181, 206, 168), // Light green
+                Color32::from_rgb(220, 220, 170), // Yellow
+                Color32::from_rgb(212, 212, 212), // Light gray (default)
+            )
+        } else {
+            (
+                Color32::from_rgb(0, 0, 170),   // Dark blue for keywords
+                Color32::from_rgb(163, 21, 21), // Dark red/brown for strings
+                Color32::from_rgb(0, 128, 0),   // Dark green for comments
+                Color32::from_rgb(100, 0, 150), // Purple for numbers
+                Color32::from_rgb(0, 102, 153), // Dark teal for function names
+                Color32::BLACK,                 // Black default text on light bg
+            )
+        };
 
     let keywords = [
         "function",
@@ -242,11 +243,11 @@ pub fn highlight_json(text: &str, font_id: egui::FontId, dark_mode: bool) -> Lay
         )
     } else {
         (
-            Color32::from_rgb(163, 21, 21),   // Dark red/brown for strings
-            Color32::from_rgb(100, 0, 150),   // Purple for numbers
-            Color32::from_rgb(0, 0, 170),     // Dark blue for true/false/null
-            Color32::from_rgb(0, 102, 204),   // Strong blue for object keys
-            Color32::BLACK,                   // Black default text
+            Color32::from_rgb(163, 21, 21), // Dark red/brown for strings
+            Color32::from_rgb(100, 0, 150), // Purple for numbers
+            Color32::from_rgb(0, 0, 170),   // Dark blue for true/false/null
+            Color32::from_rgb(0, 102, 204), // Strong blue for object keys
+            Color32::BLACK,                 // Black default text
         )
     };
 

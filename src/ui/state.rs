@@ -354,7 +354,9 @@ impl FlowchartApp {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
-    
+
+    /// Resets any non-UI related fields in the [FlowchartApp], so that when state is
+    /// persisted only settings related to the UI are retained.
     pub fn reset_non_ui_fields(&mut self) {
         *self = Self {
             properties_panel_width: self.properties_panel_width,

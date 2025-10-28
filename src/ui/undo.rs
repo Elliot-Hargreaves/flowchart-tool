@@ -59,16 +59,16 @@ pub enum UndoAction {
         index: usize,
     },
     /// A node was created
-    NodeCreated { 
+    NodeCreated {
         /// The unique identifier of the new node
-        node_id: NodeId 
+        node_id: NodeId,
     },
     /// A connection was created
-    ConnectionCreated { 
+    ConnectionCreated {
         /// Source node id
-        from: NodeId, 
+        from: NodeId,
         /// Destination node id
-        to: NodeId 
+        to: NodeId,
     },
     /// A node's name was changed
     NodeRenamed {
@@ -230,14 +230,17 @@ impl UndoableFlowchart for Flowchart {
                     None
                 }
             }
-            UndoAction::MultipleNodesMoved { old_positions, new_positions } => {
+            UndoAction::MultipleNodesMoved {
+                old_positions,
+                new_positions,
+            } => {
                 // Restore old positions
                 for (node_id, old_position) in old_positions {
                     if let Some(node) = self.nodes.get_mut(node_id) {
                         node.position = *old_position;
                     }
                 }
-                Some(UndoAction::MultipleNodesMoved { 
+                Some(UndoAction::MultipleNodesMoved {
                     old_positions: new_positions.clone(),
                     new_positions: old_positions.clone(),
                 })
@@ -566,7 +569,6 @@ mod tests {
 
         history.push_action(UndoAction::NodeCreated { node_id });
         history.push_redo(UndoAction::NodeCreated { node_id });
-
 
         assert!(history.can_redo());
 

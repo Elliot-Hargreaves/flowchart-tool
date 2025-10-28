@@ -70,7 +70,10 @@ pub async fn run_app(canvas_id: &str) -> Result<(), eframe::wasm_bindgen::JsValu
 <circle cx='32' cy='32' r='26' fill='#4287F5' stroke='#2a5db0' stroke-width='4'/>
 <path d='M20 28h24v8H20z' fill='white'/>
 </svg>"#;
-        let data_url = format!("data:image/svg+xml;utf8,{}", js_sys::encode_uri_component(svg));
+        let data_url = format!(
+            "data:image/svg+xml;utf8,{}",
+            js_sys::encode_uri_component(svg)
+        );
         link.set_attribute("href", &data_url).ok();
         head.append_child(&link).ok();
     }
@@ -138,7 +141,7 @@ fn generate_app_icon() -> egui::IconData {
             let idx = (y * size + x) * 4;
             if dist <= radius {
                 let edge = (radius - dist).clamp(0.0, 1.0);
-                rgba[idx] = 66;   // R
+                rgba[idx] = 66; // R
                 rgba[idx + 1] = 135; // G
                 rgba[idx + 2] = 245; // B
                 rgba[idx + 3] = (200.0 * edge + 55.0) as u8; // A
@@ -147,18 +150,25 @@ fn generate_app_icon() -> egui::IconData {
             }
         }
     }
-    egui::IconData { rgba, width: size as u32, height: size as u32 }
+    egui::IconData {
+        rgba,
+        width: size as u32,
+        height: size as u32,
+    }
 }
 
+/// Entrypoint for the desktop app
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_app() -> Result<(), eframe::Error> {
     let icon = generate_app_icon();
-    let mut options = eframe::NativeOptions::default();
-    options.viewport = egui::ViewportBuilder::default()
-        .with_app_id("flowchart_tool")
-        .with_icon(icon)
-        // Default window size tuned for 1080p displays (leaves room for taskbar)
-        .with_inner_size(egui::vec2(1720.0, 980.0));
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_app_id("flowchart_tool")
+            .with_icon(icon)
+            // Default window size tuned for 1080p displays (leaves room for taskbar)
+            .with_inner_size(egui::vec2(1720.0, 980.0)),
+        ..Default::default()
+    };
     eframe::run_native(
         "Flowchart Tool",
         options,
