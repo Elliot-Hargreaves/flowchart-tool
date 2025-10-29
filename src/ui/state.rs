@@ -107,6 +107,14 @@ pub struct InteractionState {
     /// Temporary storage for transformer script while editing
     #[serde(skip)]
     pub temp_transformer_script: String,
+    /// Temporary storage for transformer globals editing: per-key JSON strings
+    #[serde(skip)]
+    pub temp_transformer_globals_edits: std::collections::HashMap<String, String>,
+    /// Temporary fields to add a new global key/value
+    #[serde(skip)]
+    pub temp_new_global_key: String,
+    #[serde(skip)]
+    pub temp_new_global_value: String,
 }
 
 impl Default for InteractionState {
@@ -135,6 +143,9 @@ impl Default for InteractionState {
             temp_producer_steps_between: String::new(),
             temp_producer_message_template: String::new(),
             temp_transformer_script: String::new(),
+            temp_transformer_globals_edits: Default::default(),
+            temp_new_global_key: String::new(),
+            temp_new_global_value: String::new(),
         }
     }
 }

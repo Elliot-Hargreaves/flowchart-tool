@@ -64,6 +64,12 @@ pub enum NodeType {
         /// Optional list of destination node names to send to; None means broadcast to all
         #[serde(default)]
         selected_outputs: Option<Vec<String>>,
+        /// Persistent per-node global state exposed to scripts as `globalThis.state`
+        #[serde(default)]
+        globals: serde_json::Map<String, serde_json::Value>,
+        /// Initial values for globals; used to reset on Stop
+        #[serde(default)]
+        initial_globals: serde_json::Map<String, serde_json::Value>,
     },
 }
 
@@ -321,6 +327,8 @@ mod tests {
             NodeType::Transformer {
                 script: script.clone(),
                 selected_outputs: None,
+                globals: Default::default(),
+                initial_globals: Default::default(),
             },
         );
 

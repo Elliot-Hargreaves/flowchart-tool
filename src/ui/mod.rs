@@ -531,11 +531,15 @@ impl FlowchartApp {
                 // Reset producer counters and node states
                 for node in self.flowchart.nodes.values_mut() {
                     node.state = NodeState::Idle;
-                    if let NodeType::Producer {
-                        messages_produced, ..
-                    } = &mut node.node_type
-                    {
-                        *messages_produced = 0;
+                    match &mut node.node_type {
+                        NodeType::Producer { messages_produced, .. } => {
+                            *messages_produced = 0;
+                        }
+                        NodeType::Transformer { globals, initial_globals, .. } => {
+                            // Reset transformer globals to their initial values
+                            *globals = initial_globals.clone();
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -607,8 +611,11 @@ impl FlowchartApp {
     ///
     /// * `ui` - The egui UI context
     fn draw_properties_panel(&mut self, ui: &mut egui::Ui) {
-        ui.vertical(|ui| {
-            ui.heading("Properties");
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Properties");
             ui.separator();
 
             if let Some(selected_id) = self.interaction.selected_node {
@@ -646,6 +653,7 @@ impl FlowchartApp {
                 self.draw_no_selection_info(ui);
             }
         });
+            });
     }
 
     /// Renders connection properties in the properties panel.
@@ -901,47 +909,95 @@ impl FlowchartApp {
     fn update_transformer_property(&mut self, node_id: NodeId, property: &str) {
         if let Some(node) = self.flowchart.nodes.get(&node_id) {
             if let NodeType::Transformer { script, .. } = &node.node_type {
-                if property == "script" {
-                    let new_script = self
-                        .interaction
-                        .temp_transformer_script
-                        .replace("\t", "    ");
-                    // Only record undo if script actually changed
-                    if script != &new_script {
-                        let old_node_type = node.node_type.clone();
-                        let selected_outputs = if let NodeType::Transformer {
-                            selected_outputs,
-                            ..
-                        } = &node.node_type
-                        {
-                            selected_outputs.clone()
-                        } else {
-                            None
-                        };
-                        let new_node_type = NodeType::Transformer {
-                            script: new_script,
-                            selected_outputs,
-                        };
+                match property {
+                    "script" => {
+                        let new_script = self
+                            .interaction
+                            .temp_transformer_script
+                            .replace("\t", "    ");
+                        // Only record undo if script actually changed
+                        if script != &new_script {
+                            let old_node_type = node.node_type.clone();
+                            let selected_outputs = if let NodeType::Transformer {
+                                selected_outputs,
+                                ..
+                            } = &node.node_type
+                            {
+                                selected_outputs.clone()
+                            } else {
+                                None
+                            };
+                            let current_globals = if let NodeType::Transformer { globals, .. } = &node.node_type { globals.clone() } else { Default::default() };
+                            let current_initial_globals = if let NodeType::Transformer { initial_globals, .. } = &node.node_type { initial_globals.clone() } else { Default::default() };
+                            let new_node_type = NodeType::Transformer {
+                                script: new_script,
+                                selected_outputs,
+                                globals: current_globals,
+                                initial_globals: current_initial_globals,
+                            };
 
-                        // Record undo action
-                        self.undo_history.push_action(UndoAction::PropertyChanged {
-                            node_id,
-                            old_node_type,
-                            new_node_type: new_node_type.clone(),
-                        });
+                            // Record undo action
+                            self.undo_history.push_action(UndoAction::PropertyChanged {
+                                node_id,
+                                old_node_type,
+                                new_node_type: new_node_type.clone(),
+                            });
 
-                        // Apply the change
-                        if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
-                            node.node_type = new_node_type;
-                            // Clear error state on script edits
-                            if let NodeState::Error(_) = node.state {
-                                node.state = NodeState::Idle;
+                            // Apply the change
+                            if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+                                node.node_type = new_node_type;
+                                // Clear error state on script edits
+                                if let NodeState::Error(_) = node.state {
+                                    node.state = NodeState::Idle;
+                                }
+                            }
+                            // Clear global error highlight when script changes
+                            self.error_node = None;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
+                    "globals" => {
+                        // Parse temp edits into a map
+                        let mut new_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                        let mut parse_failed = false;
+                        for (k, vstr) in &self.interaction.temp_transformer_globals_edits {
+                            match serde_json::from_str::<serde_json::Value>(vstr.trim()) {
+                                Ok(v) => {
+                                    new_map.insert(k.clone(), v);
+                                }
+                                Err(_) => {
+                                    parse_failed = true;
+                                    break;
+                                }
                             }
                         }
-                        // Clear global error highlight when script changes
-                        self.error_node = None;
-                        self.file.has_unsaved_changes = true;
+                        if !parse_failed {
+                            let old_node_type = node.node_type.clone();
+                            let (cur_script, selected_outputs) = if let NodeType::Transformer { script, selected_outputs, .. } = &node.node_type {
+                                (script.clone(), selected_outputs.clone())
+                            } else {
+                                (String::new(), None)
+                            };
+                            let new_node_type = NodeType::Transformer {
+                                script: cur_script,
+                                selected_outputs,
+                                globals: new_map.clone(),
+                                initial_globals: new_map,
+                            };
+                            // Record undo action
+                            self.undo_history.push_action(UndoAction::PropertyChanged {
+                                node_id,
+                                old_node_type,
+                                new_node_type: new_node_type.clone(),
+                            });
+                            // Apply the change
+                            if let Some(node) = self.flowchart.nodes.get_mut(&node_id) {
+                                node.node_type = new_node_type;
+                            }
+                            self.file.has_unsaved_changes = true;
+                        }
                     }
+                    _ => {}
                 }
             }
         }
@@ -1163,6 +1219,152 @@ impl FlowchartApp {
                     ui.separator();
                     ui.colored_label(egui::Color32::RED, format!("Script error: {}", msg));
                 }
+
+                ui.separator();
+                ui.heading("Global State (persisted between runs)");
+                ui.label("These values are available in scripts as globalThis.state");
+
+                // Initialize temp globals buffer once if empty
+                if self.interaction.temp_transformer_globals_edits.is_empty() {
+                    if let NodeType::Transformer { globals, .. } = &node.node_type {
+                        for (k, v) in globals.iter() {
+                            let s = serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".to_string());
+                            self.interaction
+                                .temp_transformer_globals_edits
+                                .insert(k.clone(), s);
+                        }
+                    }
+                }
+
+                // New entry inputs
+
+                ui.horizontal(|ui| {
+                    ui.label("New key:");
+                    ui.text_edit_singleline(&mut self.interaction.temp_new_global_key);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Value (JSON):");
+                    ui.text_edit_singleline(&mut self.interaction.temp_new_global_value);
+                });
+                if ui.button("Add").clicked() {
+                    let key = self.interaction.temp_new_global_key.trim().to_string();
+                    if !key.is_empty()
+                        && !self
+                            .interaction
+                            .temp_transformer_globals_edits
+                            .contains_key(&key)
+                    {
+                        // Validate JSON
+                        match serde_json::from_str::<serde_json::Value>(
+                            self.interaction.temp_new_global_value.trim(),
+                        ) {
+                            Ok(_) => {
+                                self.interaction
+                                    .temp_transformer_globals_edits
+                                    .insert(key, self.interaction.temp_new_global_value.trim().to_string());
+                                self.interaction.temp_new_global_key.clear();
+                                self.interaction.temp_new_global_value.clear();
+                            }
+                            Err(err) => {
+                                ui.colored_label(egui::Color32::RED, format!("Invalid JSON: {}", err));
+                            }
+                        }
+                    }
+                }
+
+                ui.separator();
+
+                // Existing entries table
+                egui::Grid::new("globals_table").num_columns(3).striped(true).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Key").strong());
+                    ui.label(egui::RichText::new("Value (JSON)").strong());
+                    ui.label("");
+                    ui.end_row();
+
+                    // Stable order
+                    let mut keys: Vec<String> = self
+                        .interaction
+                        .temp_transformer_globals_edits
+                        .keys()
+                        .cloned()
+                        .collect();
+                    keys.sort();
+
+                    let mut to_remove: Option<String> = None;
+
+                    for key in keys {
+                        let val_str = self
+                            .interaction
+                            .temp_transformer_globals_edits
+                            .get_mut(&key)
+                            .unwrap();
+
+                        ui.label(key.clone());
+
+                        let response = ui.text_edit_singleline(val_str);
+
+                        // Validate JSON on change; show inline error
+                        if response.changed() {
+                            if let Err(err) = serde_json::from_str::<serde_json::Value>(val_str.trim()) {
+                                ui.colored_label(egui::Color32::RED, format!("Invalid JSON: {}", err));
+                            }
+                        }
+
+                        if ui.button("Remove").clicked() {
+                            to_remove = Some(key.clone());
+                        }
+
+                        ui.end_row();
+                    }
+
+                    if let Some(k) = to_remove {
+                        self.interaction.temp_transformer_globals_edits.remove(&k);
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save Globals").clicked() {
+                        // Attempt to parse all values and persist
+                        let mut new_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                        let mut parse_error: Option<String> = None;
+                        for (k, vstr) in &self.interaction.temp_transformer_globals_edits {
+                            match serde_json::from_str::<serde_json::Value>(vstr.trim()) {
+                                Ok(v) => {
+                                    new_map.insert(k.clone(), v);
+                                }
+                                Err(err) => {
+                                    parse_error = Some(format!("Key '{}': {}", k, err));
+                                    break;
+                                }
+                            }
+                        }
+
+                        if let Some(err) = parse_error {
+                            ui.colored_label(egui::Color32::RED, format!("Cannot save: {}", err));
+                        } else {
+                            // Persist via property update
+                            self.interaction.temp_new_global_key.clear();
+                            self.interaction.temp_new_global_value.clear();
+                            // Store new map temporarily in interaction by replacing node.globals during update call
+                            // Reuse update_transformer_property path
+                            // Stash the new_map into a local; update function will read from temp edits
+                            self.update_transformer_property(node.id, "globals");
+                        }
+                    }
+
+                    if ui.button("Reload from Node").clicked() {
+                        self.interaction.temp_transformer_globals_edits.clear();
+                        if let NodeType::Transformer { globals, .. } = &node.node_type {
+                            for (k, v) in globals.iter() {
+                                let s = serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".to_string());
+                                self.interaction
+                                    .temp_transformer_globals_edits
+                                    .insert(k.clone(), s);
+                            }
+                        }
+                    }
+                });
             }
         }
     }
@@ -1234,6 +1436,8 @@ impl FlowchartApp {
                             self.create_node_at_pos(NodeType::Transformer {
                                 script: "// Transform the input message with optional routing via __targets\nfunction transform(input) {\n    // To target specific outputs by node name, include __targets as an array.\n    // For example, send only to node named \"NextNode\":\n    // return { value: input.value, __targets: [\"NextNode\"] };\n    // If __targets is omitted or null, the message is broadcast to all outputs.\n    return input;\n}".to_string(),
                                 selected_outputs: None,
+                                globals: Default::default(),
+                                initial_globals: Default::default(),
                             });
                             self.context_menu.show = false;
                         }

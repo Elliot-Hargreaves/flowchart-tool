@@ -240,7 +240,7 @@ impl SimulationEngine {
         flowchart: &mut Flowchart,
     ) -> Result<(), String> {
         if let Some(node) = flowchart.nodes.get_mut(&node_id) {
-            match &node.node_type {
+            match &mut node.node_type {
                 NodeType::Consumer { .. } => {
                     // Message is consumed and destroyed
                     node.state = NodeState::Processing;
@@ -249,6 +249,8 @@ impl SimulationEngine {
                 NodeType::Transformer {
                     script,
                     selected_outputs: _,
+                    globals,
+                    ..
                 } => {
                     // Execute JavaScript to transform the message
                     node.state = NodeState::Processing;
@@ -256,7 +258,7 @@ impl SimulationEngine {
 
                     // Execute the transformation script
                     let mut transformed_messages =
-                        match execute_transformer_script(&script, &message) {
+                        match execute_transformer_script_with_globals(&script, &message, globals) {
                             Ok(msgs) => msgs,
                             Err(err) => {
                                 // Record error state on the node and propagate the error
@@ -357,12 +359,19 @@ impl SimulationEngine {
 /// // Return transformed message(s)
 /// new_data;
 /// ```
-pub fn execute_transformer_script(
+pub fn execute_transformer_script_with_globals(
     script: &str,
     input_message: &Message,
+    globals: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<Vec<Message>, String> {
     let mut script_engine =
         create_script_engine().map_err(|e| format!("Failed to create script engine: {}", e))?;
+
+    // Provide per-node persistent globals as `globalThis.state`
+    let state_value = serde_json::Value::Object(globals.clone());
+    script_engine
+        .set_global_json("state", &state_value)
+        .map_err(|e| format!("Failed to set state: {}", e))?;
 
     // Create input JSON for the script
     let input_json = serde_json::json!(input_message.data);
@@ -376,6 +385,13 @@ pub fn execute_transformer_script(
     let result = script_engine
         .call_function("transform", input_json)
         .map_err(|e| format!("Failed to call transform function: {}", e))?;
+
+    // Read back potentially mutated state and persist it for the node
+    if let Ok(new_state) = script_engine.get_global_json("state") {
+        if let serde_json::Value::Object(obj) = new_state {
+            *globals = obj;
+        }
+    }
 
     // Create a new message with the transformed data
     let transformed_message = Message {
@@ -419,7 +435,8 @@ mod tests {
         "#;
 
         let input = Message::new(json!({"original": "data"}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
 
         assert_eq!(result.len(), 1);
         let transformed_message = &result[0];
@@ -632,6 +649,8 @@ mod tests {
                 "#
                 .to_string(),
                 selected_outputs: None,
+                globals: Default::default(),
+                initial_globals: Default::default(),
             },
         );
         let transformer_id = transformer.id;
@@ -691,6 +710,8 @@ mod tests {
                 "#
                 .to_string(),
                 selected_outputs: None,
+                globals: Default::default(),
+                initial_globals: Default::default(),
             },
         );
         let transformer_id = transformer.id;
@@ -727,6 +748,8 @@ mod programmatic_routing_tests {
                 "#
                 .to_string(),
                 selected_outputs: None,
+                globals: Default::default(),
+                initial_globals: Default::default(),
             },
         );
         let transformer_id = transformer.id;
@@ -782,4 +805,15 @@ mod programmatic_routing_tests {
         assert_eq!(payload.get("value"), Some(&json!(14)));
         assert!(payload.get("__targets").is_none());
     }
+}
+
+
+/// Backward-compatible wrapper that executes a transformer script without exposing globals.
+/// Internally uses an empty `globals` map.
+pub fn execute_transformer_script(
+    script: &str,
+    input_message: &Message,
+) -> Result<Vec<Message>, String> {
+    let mut globals: serde_json::Map<String, serde_json::Value> = Default::default();
+    execute_transformer_script_with_globals(script, input_message, &mut globals)
 }

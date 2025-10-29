@@ -22,7 +22,7 @@ use boa_engine::{
     js_string, object::builtins::JsArray, property::PropertyKey, Context, JsObject, JsResult,
     JsString, JsValue, Source,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// JavaScript script execution engine that works on all platforms
 pub struct JavaScriptEngine {
@@ -30,6 +30,25 @@ pub struct JavaScriptEngine {
 }
 
 impl JavaScriptEngine {
+    /// Set a global property on the JS global object from a serde_json::Value
+    pub fn set_global_json(&mut self, name: &str, value: &Value) -> Result<(), String> {
+        let js_val = self.json_to_js_value(value)?;
+        let global = self.context.global_object().clone();
+        global
+            .set(js_string!(name), js_val, true, &mut self.context)
+            .map_err(|e| format!("Failed to set global '{}': {}", name, e))?;
+        Ok(())
+    }
+
+    /// Get a global property from the JS global object as serde_json::Value
+    pub fn get_global_json(&mut self, name: &str) -> Result<Value, String> {
+        let global = self.context.global_object().clone();
+        let v = global
+            .get(js_string!(name), &mut self.context)
+            .map_err(|e| format!("Failed to get global '{}': {}", name, e))?;
+        self.js_value_to_json(&v)
+    }
+
     /// Create a new JavaScript script engine with sandboxed execution environment
     ///
     /// The sandbox restricts access to potentially dangerous JavaScript features:
@@ -272,7 +291,7 @@ pub fn create_script_engine() -> Result<JavaScriptEngine, String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::simulation::execute_transformer_script;
+    use crate::simulation::{execute_transformer_script, execute_transformer_script_with_globals};
     use crate::types::Message;
     use serde_json::{json, Number, Value};
 
@@ -285,7 +304,8 @@ mod tests {
             }
         "#;
         let input = Message::new(json!({"value": 21}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
         let output = &result[0].data;
 
         assert_eq!(output["value"], 42);
@@ -300,7 +320,8 @@ mod tests {
             }
         "#;
         let input = Message::new(json!({"existingField": "original"}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
         let output = &result[0].data;
 
         assert_eq!(output["existingField"], "original");
@@ -316,7 +337,8 @@ mod tests {
             }
         "#;
         let input = Message::new(json!({"text": "hello world"}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
         let output = &result[0].data;
 
         assert_eq!(output["text"], "HELLO WORLD");
@@ -331,7 +353,8 @@ mod tests {
             }
         "#;
         let input = Message::new(json!({"nested": {"value": 5}}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
         let output = &result[0].data;
 
         assert_eq!(output["nested"]["value"], 15);
@@ -346,7 +369,8 @@ mod tests {
             }
         "#;
         let input = Message::new(json!({"items": ["a", "b"]}));
-        let result = execute_transformer_script(script, &input).unwrap();
+        let mut globals = Default::default();
+        let result = execute_transformer_script_with_globals(script, &input, &mut globals).unwrap();
         let output = &result[0].data;
 
         assert_eq!(output["items"].as_array().unwrap().len(), 3);
