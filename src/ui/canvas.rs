@@ -90,6 +90,7 @@ impl FlowchartApp {
     ///
     /// Zooms in/out while keeping the mouse cursor position fixed in world space.
     /// Zoom range is clamped between 0.25x and 5.0x.
+    /// Only zooms if the cursor is over the canvas.
     ///
     /// # Arguments
     ///
@@ -105,6 +106,11 @@ impl FlowchartApp {
                 .or_else(|| response.interact_pointer_pos());
 
             if let Some(mouse_pos) = mouse_pos {
+                // Only zoom if the cursor is over the canvas
+                if !response.rect.contains(mouse_pos) {
+                    return;
+                }
+
                 // Calculate the world position under the mouse cursor before zoom
                 let world_pos_before_zoom = self.screen_to_world(mouse_pos);
 
