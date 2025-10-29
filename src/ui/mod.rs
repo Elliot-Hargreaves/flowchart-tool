@@ -1221,13 +1221,70 @@ impl FlowchartApp {
                 }
 
                 ui.separator();
-                ui.heading("Global State (persisted between runs)");
+                ui.heading("Global State");
                 ui.label("These values are available in scripts as globalThis.state");
+                ui.add_space(4.0);
 
-                // Initialize temp globals buffer once if empty
-                if self.interaction.temp_transformer_globals_edits.is_empty() {
-                    if let NodeType::Transformer { globals, .. } = &node.node_type {
-                        for (k, v) in globals.iter() {
+                // Initialize or reload temp globals buffer if empty or if node changed
+                if self.interaction.temp_transformer_globals_edits.is_empty()
+                    || self.interaction.temp_globals_node_id != Some(node.id) {
+
+                    // Before switching to a new node, save any pending edits from the previous node
+                    if let Some(prev_node_id) = self.interaction.temp_globals_node_id {
+                        if prev_node_id != node.id && !self.interaction.temp_transformer_globals_edits.is_empty() {
+                            // Auto-save the edits to the previous node
+                            if let Some(prev_node) = self.flowchart.nodes.get(&prev_node_id) {
+                                if let NodeType::Transformer { .. } = &prev_node.node_type {
+                                    // Parse and save the temp edits
+                                    let mut new_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+                                    let mut all_valid = true;
+                                    for (k, vstr) in &self.interaction.temp_transformer_globals_edits {
+                                        match serde_json::from_str::<serde_json::Value>(vstr.trim()) {
+                                            Ok(v) => {
+                                                new_map.insert(k.clone(), v);
+                                            }
+                                            Err(_) => {
+                                                all_valid = false;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // Only save if all values are valid JSON
+                                    if all_valid {
+                                        let old_node_type = prev_node.node_type.clone();
+                                        let (cur_script, selected_outputs, cur_globals) = if let NodeType::Transformer { script, selected_outputs, globals, .. } = &prev_node.node_type {
+                                            (script.clone(), selected_outputs.clone(), globals.clone())
+                                        } else {
+                                            (String::new(), None, Default::default())
+                                        };
+                                        let new_node_type = NodeType::Transformer {
+                                            script: cur_script,
+                                            selected_outputs,
+                                            globals: cur_globals,
+                                            initial_globals: new_map,
+                                        };
+                                        // Record undo action
+                                        self.undo_history.push_action(UndoAction::PropertyChanged {
+                                            node_id: prev_node_id,
+                                            old_node_type,
+                                            new_node_type: new_node_type.clone(),
+                                        });
+                                        // Apply the change
+                                        if let Some(node_mut) = self.flowchart.nodes.get_mut(&prev_node_id) {
+                                            node_mut.node_type = new_node_type;
+                                        }
+                                        self.file.has_unsaved_changes = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Now load the new node's globals
+                    self.interaction.temp_transformer_globals_edits.clear();
+                    self.interaction.temp_globals_node_id = Some(node.id);
+                    if let NodeType::Transformer { initial_globals, .. } = &node.node_type {
+                        for (k, v) in initial_globals.iter() {
                             let s = serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".to_string());
                             self.interaction
                                 .temp_transformer_globals_edits
@@ -1236,95 +1293,173 @@ impl FlowchartApp {
                     }
                 }
 
-                // New entry inputs
-
+                // New entry inputs - horizontally aligned
+                ui.label(egui::RichText::new("Add New Global Variable:").strong());
+                let mut global_var_def_error: Option<String> = None;
                 ui.horizontal(|ui| {
-                    ui.label("New key:");
-                    ui.text_edit_singleline(&mut self.interaction.temp_new_global_key);
-                });
+                    ui.label("Key:");
+                    ui.add_sized([100.0, 20.0], egui::TextEdit::singleline(&mut self.interaction.temp_new_global_key));
 
-                ui.horizontal(|ui| {
-                    ui.label("Value (JSON):");
-                    ui.text_edit_singleline(&mut self.interaction.temp_new_global_value);
-                });
-                if ui.button("Add").clicked() {
-                    let key = self.interaction.temp_new_global_key.trim().to_string();
-                    if !key.is_empty()
-                        && !self
-                            .interaction
-                            .temp_transformer_globals_edits
-                            .contains_key(&key)
-                    {
-                        // Validate JSON
-                        match serde_json::from_str::<serde_json::Value>(
-                            self.interaction.temp_new_global_value.trim(),
-                        ) {
-                            Ok(_) => {
-                                self.interaction
-                                    .temp_transformer_globals_edits
-                                    .insert(key, self.interaction.temp_new_global_value.trim().to_string());
-                                self.interaction.temp_new_global_key.clear();
-                                self.interaction.temp_new_global_value.clear();
-                            }
-                            Err(err) => {
-                                ui.colored_label(egui::Color32::RED, format!("Invalid JSON: {}", err));
+                    ui.add_space(8.0);
+
+                    ui.label("Initial Value (JSON):");
+                    ui.add_sized([120.0, 20.0], egui::TextEdit::singleline(&mut self.interaction.temp_new_global_value));
+
+                    ui.add_space(8.0);
+
+                    if ui.button("Add").clicked() {
+                        let key = self.interaction.temp_new_global_key.trim().to_string();
+                        if !key.is_empty()
+                            && !self
+                                .interaction
+                                .temp_transformer_globals_edits
+                                .contains_key(&key)
+                        {
+                            // Validate JSON
+                            match serde_json::from_str::<serde_json::Value>(
+                                self.interaction.temp_new_global_value.trim(),
+                            ) {
+                                Ok(_) => {
+                                    self.interaction
+                                        .temp_transformer_globals_edits
+                                        .insert(key, self.interaction.temp_new_global_value.trim().to_string());
+                                    self.interaction.temp_new_global_key.clear();
+                                    self.interaction.temp_new_global_value.clear();
+                                }
+                                Err(_) => {
+                                    // It didn't parse normally, try wrapping it in quotes
+                                    let quoted_string = format!("\"{}\"", self.interaction.temp_new_global_value.trim());
+                                    match serde_json::from_str::<serde_json::Value>(
+                                        &quoted_string,
+                                    ) {
+                                        Ok(_) => {
+                                            self.interaction
+                                                .temp_transformer_globals_edits
+                                                .insert(key, quoted_string);
+                                            self.interaction.temp_new_global_key.clear();
+                                            self.interaction.temp_new_global_value.clear();
+                                        }
+                                        Err(err) => {
+                                            global_var_def_error = Some(format!("Invalid JSON: {err}"));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                });
+                if let Some(var_def_error) = global_var_def_error {
+                    ui.colored_label(egui::Color32::RED, var_def_error);
                 }
 
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(4.0);
 
-                // Existing entries table
-                egui::Grid::new("globals_table").num_columns(3).striped(true).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Key").strong());
-                    ui.label(egui::RichText::new("Value (JSON)").strong());
-                    ui.label("");
-                    ui.end_row();
+                // Existing entries table - enhanced with saved vs current value
+                ui.label(egui::RichText::new("Global Variables:").strong());
+                ui.add_space(4.0);
 
-                    // Stable order
-                    let mut keys: Vec<String> = self
-                        .interaction
-                        .temp_transformer_globals_edits
-                        .keys()
-                        .cloned()
-                        .collect();
-                    keys.sort();
+                // Get current runtime values from node
+                let current_values = if let NodeType::Transformer { globals, .. } = &node.node_type {
+                    globals.clone()
+                } else {
+                    Default::default()
+                };
 
-                    let mut to_remove: Option<String> = None;
+                // Stable order
+                let mut keys: Vec<String> = self
+                    .interaction
+                    .temp_transformer_globals_edits
+                    .keys()
+                    .cloned()
+                    .collect();
+                keys.sort();
 
-                    for key in keys {
-                        let val_str = self
-                            .interaction
-                            .temp_transformer_globals_edits
-                            .get_mut(&key)
-                            .unwrap();
+                let mut to_remove: Option<String> = None;
 
-                        ui.label(key.clone());
+                        egui::Grid::new("transformer_globals_table")
+                            .num_columns(4)
+                            .striped(true)
+                            .spacing([10.0, 4.0])
+                            .show(ui, |ui| {
+                                // Header row
+                                ui.label(egui::RichText::new("Key").strong());
+                                ui.label(egui::RichText::new("Saved Value").strong())
+                                    .on_hover_text("Initial value used at simulation start");
+                                ui.label(egui::RichText::new("Current Value").strong())
+                                    .on_hover_text("Value updated during simulation");
+                                ui.label("");
+                                ui.end_row();
 
-                        let response = ui.text_edit_singleline(val_str);
+                                for key in &keys {
+                                    let saved_val_str = self
+                                        .interaction
+                                        .temp_transformer_globals_edits
+                                        .get_mut(key)
+                                        .unwrap();
 
-                        // Validate JSON on change; show inline error
-                        if response.changed() {
-                            if let Err(err) = serde_json::from_str::<serde_json::Value>(val_str.trim()) {
-                                ui.colored_label(egui::Color32::RED, format!("Invalid JSON: {}", err));
-                            }
-                        }
+                                    // Key column (read-only)
+                                    ui.label(egui::RichText::new(key).monospace());
 
-                        if ui.button("Remove").clicked() {
-                            to_remove = Some(key.clone());
-                        }
+                                    // Saved value column (editable)
+                                    let saved_response = ui.add_sized(
+                                        [150.0, 20.0],
+                                        egui::TextEdit::singleline(saved_val_str)
+                                            .font(egui::TextStyle::Monospace)
+                                            .id_source(format!("global_saved_{}", key))
+                                    );
 
-                        ui.end_row();
-                    }
+                                    // Validate JSON on change
+                                    if saved_response.changed() {
+                                        if serde_json::from_str::<serde_json::Value>(saved_val_str.trim()).is_err() {
+                                            saved_response.on_hover_text_at_pointer("⚠ Invalid JSON");
+                                        }
+                                    }
 
-                    if let Some(k) = to_remove {
-                        self.interaction.temp_transformer_globals_edits.remove(&k);
-                    }
-                });
+                                    // Current value column (read-only, shows runtime value)
+                                    let current_val_str = if let Some(current_val) = current_values.get(key) {
+                                        serde_json::to_string_pretty(current_val)
+                                            .unwrap_or_else(|_| "null".to_string())
+                                    } else {
+                                        saved_val_str.clone()
+                                    };
 
+                                    // Highlight if current differs from saved
+                                    let differs = current_val_str.trim() != saved_val_str.trim();
+                                    let current_text = if differs {
+                                        egui::RichText::new(current_val_str.lines().next().unwrap_or(""))
+                                            .monospace()
+                                            .color(egui::Color32::from_rgb(100, 200, 255))
+                                    } else {
+                                        egui::RichText::new(current_val_str.lines().next().unwrap_or(""))
+                                            .monospace()
+                                            .color(egui::Color32::GRAY)
+                                    };
+
+                                    ui.label(current_text)
+                                        .on_hover_text(if differs {
+                                            "Runtime value differs from saved"
+                                        } else {
+                                            "Runtime value matches saved"
+                                        });
+
+                                    // Actions column
+                                    if ui.button("✖").on_hover_text("Remove variable").clicked() {
+                                        to_remove = Some(key.clone());
+                                    }
+
+                                    ui.end_row();
+                                }
+                            });
+
+                if let Some(k) = to_remove {
+                    self.interaction.temp_transformer_globals_edits.remove(&k);
+                }
+
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Save Globals").clicked() {
+                    if ui.button("💾 Save Changes").clicked() {
                         // Attempt to parse all values and persist
                         let mut new_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
                         let mut parse_error: Option<String> = None;
@@ -1346,17 +1481,14 @@ impl FlowchartApp {
                             // Persist via property update
                             self.interaction.temp_new_global_key.clear();
                             self.interaction.temp_new_global_value.clear();
-                            // Store new map temporarily in interaction by replacing node.globals during update call
-                            // Reuse update_transformer_property path
-                            // Stash the new_map into a local; update function will read from temp edits
                             self.update_transformer_property(node.id, "globals");
                         }
                     }
 
-                    if ui.button("Reload from Node").clicked() {
+                    if ui.button("↻ Reload from Node").clicked() {
                         self.interaction.temp_transformer_globals_edits.clear();
-                        if let NodeType::Transformer { globals, .. } = &node.node_type {
-                            for (k, v) in globals.iter() {
+                        if let NodeType::Transformer { initial_globals, .. } = &node.node_type {
+                            for (k, v) in initial_globals.iter() {
                                 let s = serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".to_string());
                                 self.interaction
                                     .temp_transformer_globals_edits
@@ -1647,6 +1779,8 @@ impl FlowchartApp {
     }
 
     /// Clears all temporary editing values for node properties.
+    /// Note: This does NOT clear transformer globals - those are managed separately
+    /// based on node selection to preserve unsaved edits when reselecting the same node.
     fn clear_temp_editing_values(&mut self) {
         self.interaction.temp_producer_start_step.clear();
         self.interaction.temp_producer_messages_per_cycle.clear();

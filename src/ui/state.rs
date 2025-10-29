@@ -115,6 +115,9 @@ pub struct InteractionState {
     pub temp_new_global_key: String,
     #[serde(skip)]
     pub temp_new_global_value: String,
+    /// Track which node's globals are currently loaded in temp_transformer_globals_edits
+    #[serde(skip)]
+    pub temp_globals_node_id: Option<NodeId>,
 }
 
 impl Default for InteractionState {
@@ -146,6 +149,7 @@ impl Default for InteractionState {
             temp_transformer_globals_edits: Default::default(),
             temp_new_global_key: String::new(),
             temp_new_global_value: String::new(),
+            temp_globals_node_id: None,
         }
     }
 }
