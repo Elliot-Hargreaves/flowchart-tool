@@ -1409,3 +1409,214 @@ fn auto_layout_changes_positions_and_undo_restores() {
         assert_eq!(now, pos, "undo should restore position for node {id:?}");
     }
 }
+
+// ===== Properties panel interaction tests =====
+
+#[test]
+fn producer_property_updates_apply_via_update_calls() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create a producer and select it
+    let p = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (100.0, 100.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({"a": 1}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+    app.interaction.selected_node = Some(p);
+
+    // Stage new values in temp fields
+    app.interaction.temp_producer_start_step = "10".to_string();
+    app.interaction.temp_producer_messages_per_cycle = "5".to_string();
+    app.interaction.temp_producer_steps_between = "3".to_string();
+    app.interaction.temp_producer_message_template = "{\n  \"a\": 2,\n  \"b\": true\n}".to_string();
+
+    // Commit via dedicated update methods (these are what the UI calls on .changed())
+    app.update_producer_property(p, "start_step");
+    app.update_producer_property(p, "messages_per_cycle");
+    app.update_producer_property(p, "steps_between_cycles");
+    app.update_producer_property(p, "message_template");
+
+    // Assert underlying node was updated
+    if let Some(n) = app.flowchart.nodes.get(&p) {
+        if let NodeType::Producer { message_template, start_step, messages_per_cycle, steps_between_cycles, .. } = &n.node_type {
+            assert_eq!(*start_step, 10);
+            assert_eq!(*messages_per_cycle, 5);
+            assert_eq!(*steps_between_cycles, 3);
+            assert_eq!(message_template["a"], serde_json::json!(2));
+            assert_eq!(message_template["b"], serde_json::json!(true));
+        } else {
+            panic!("node type changed unexpectedly");
+        }
+    } else {
+        panic!("producer not found");
+    }
+}
+
+#[test]
+fn transformer_globals_autosave_on_selection_switch_with_valid_json() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Two transformer nodes
+    let t1 = app.flowchart.add_node(FlowchartNode::new(
+        "T1".into(),
+        (200.0, 200.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let t2 = app.flowchart.add_node(FlowchartNode::new(
+        "T2".into(),
+        (300.0, 200.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    // Select t1 and stage a valid JSON edit in the temp map
+    app.interaction.selected_node = Some(t1);
+    app.interaction.temp_transformer_globals_edits.clear();
+    app.interaction.temp_transformer_globals_edits.insert("k".to_string(), "123".to_string());
+    app.interaction.temp_globals_node_id = Some(t1);
+
+    // Run one frame to display panel for t1 (not strictly required for autosave yet)
+    let ctx = egui::Context::default();
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    // Switch selection to t2 and draw panel; this should autosave t1's valid edits into initial_globals
+    app.interaction.selected_node = Some(t2);
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    // Assert: t1.initial_globals now includes { k: 123 }
+    let t1_node = app.flowchart.nodes.get(&t1).unwrap();
+    if let NodeType::Transformer { initial_globals, .. } = &t1_node.node_type {
+        assert_eq!(initial_globals.get("k"), Some(&serde_json::json!(123)));
+    } else {
+        panic!("t1 not a transformer");
+    }
+}
+
+#[test]
+fn transformer_globals_invalid_json_is_not_saved_on_switch() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let t1 = app.flowchart.add_node(FlowchartNode::new(
+        "T1".into(),
+        (200.0, 220.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let t2 = app.flowchart.add_node(FlowchartNode::new(
+        "T2".into(),
+        (320.0, 220.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    // Select t1 and stage INVALID JSON (not quoted, not a number)
+    app.interaction.selected_node = Some(t1);
+    app.interaction.temp_transformer_globals_edits.clear();
+    app.interaction.temp_transformer_globals_edits.insert("bad".to_string(), "not_json".to_string());
+    app.interaction.temp_globals_node_id = Some(t1);
+
+    let ctx = egui::Context::default();
+    // Draw once for t1
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    // Switch to t2 which triggers autosave attempt for t1, which must fail and not modify t1.initial_globals
+    app.interaction.selected_node = Some(t2);
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    let t1_node = app.flowchart.nodes.get(&t1).unwrap();
+    if let NodeType::Transformer { initial_globals, .. } = &t1_node.node_type {
+        assert!(initial_globals.get("bad").is_none(), "invalid JSON should not be saved");
+    } else {
+        panic!("t1 not a transformer");
+    }
+}
+
+#[test]
+fn transformer_globals_per_node_isolation_and_reload() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let t1 = app.flowchart.add_node(FlowchartNode::new(
+        "T1".into(),
+        (240.0, 260.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let t2 = app.flowchart.add_node(FlowchartNode::new(
+        "T2".into(),
+        (360.0, 260.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    let ctx = egui::Context::default();
+
+    // Select t1 and stage valid edit; then switch to t2 (autosave t1)
+    app.interaction.selected_node = Some(t1);
+    app.interaction.temp_transformer_globals_edits.clear();
+    app.interaction.temp_transformer_globals_edits.insert("x".to_string(), "42".to_string());
+    app.interaction.temp_globals_node_id = Some(t1);
+    // Draw once on t1
+    let mut r0 = egui::RawInput::default();
+    r0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(r0, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui)); });
+    // Switch to t2 → autosave t1 and load t2 (empty)
+    app.interaction.selected_node = Some(t2);
+    let mut r1 = egui::RawInput::default();
+    r1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(r1, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui)); });
+    // On t2, staging should be empty (no initial_globals on t2 yet)
+    assert!(app.interaction.temp_transformer_globals_edits.is_empty());
+
+    // Now stage something for t2 and switch back to t1; t2 should autosave
+    app.interaction.temp_transformer_globals_edits.insert("y".to_string(), "true".to_string());
+    app.interaction.temp_globals_node_id = Some(t2);
+    app.interaction.selected_node = Some(t1);
+    let mut r2 = egui::RawInput::default();
+    r2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    let _ = ctx.run(r2, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui)); });
+
+    // Assert: t2.initial_globals saved { y: true }
+    let t2_node = app.flowchart.nodes.get(&t2).unwrap();
+    if let NodeType::Transformer { initial_globals, .. } = &t2_node.node_type {
+        assert_eq!(initial_globals.get("y"), Some(&serde_json::json!(true)));
+    } else {
+        panic!("t2 not a transformer");
+    }
+
+    // On switching back to t1, staging should be loaded from t1.initial_globals { x: 42 }
+    let staged = &app.interaction.temp_transformer_globals_edits;
+    assert_eq!(staged.get("x").map(|s| s.trim()), Some("42"));
+}
