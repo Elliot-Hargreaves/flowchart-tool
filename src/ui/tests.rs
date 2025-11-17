@@ -131,3 +131,234 @@ fn drawing_canvas_with_node_produces_shapes() {
     // We don't assert an exact number, just that something was painted.
     assert!(out.shapes.len() > 0, "expected some shapes to be painted");
 }
+
+#[test]
+fn marquee_multi_selects_nodes_inside_rectangle() {
+    let mut app = FlowchartApp::default();
+
+    // Ensure deterministic canvas coords
+    app.node_counter = 1; // skip auto-centering
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Place two nodes that will be inside the marquee rectangle
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "N1".into(),
+            (150.0, 120.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "N2".into(),
+            (280.0, 180.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    // Start drag on empty space, drag to cover both nodes, then release
+    let start = egui::pos2(100.0, 80.0); // empty space
+    let end = egui::pos2(320.0, 220.0); // covers both centers above
+
+    let ctx = egui::Context::default();
+
+    // Frame 0: move to start
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw0.events = vec![egui::Event::PointerMoved(start)];
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 1: press primary
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw1.events = vec![egui::Event::PointerButton {
+        pos: start,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    }];
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 2: drag to end
+    let mut raw2 = egui::RawInput::default();
+    raw2.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw2.events = vec![egui::Event::PointerMoved(end)];
+    let _ = ctx.run(raw2, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 3: release
+    let mut raw3 = egui::RawInput::default();
+    raw3.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw3.events = vec![egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    }];
+    let _ = ctx.run(raw3, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Assert both nodes are selected; order is not guaranteed
+    let mut sel = app.interaction.selected_nodes.clone();
+    sel.sort_by_key(|id| id.as_u128());
+    let mut expected = vec![n1, n2];
+    expected.sort_by_key(|id| id.as_u128());
+    assert_eq!(sel, expected, "marquee should select both nodes");
+
+    // Marquee visuals should be cleared
+    assert!(app.interaction.marquee_start.is_none());
+    assert!(app.interaction.marquee_end.is_none());
+}
+
+#[test]
+fn shift_drag_creates_connection_between_nodes() {
+    let mut app = FlowchartApp::default();
+
+    // Deterministic canvas
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create a valid connection pair: Producer -> Consumer
+    let producer_id = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (160.0, 120.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+
+    let consumer_id = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (360.0, 120.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let start = egui::pos2(160.0, 120.0);
+    let end = egui::pos2(360.0, 120.0);
+
+    let ctx = egui::Context::default();
+
+    // Frame 0: move to start
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw0.events = vec![egui::Event::PointerMoved(start)];
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 1: keep mouse idle but prepare Shift state in following frame
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw1.events = vec![];
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 2: press primary over producer to start connection
+    let mut raw2 = egui::RawInput::default();
+    raw2.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    // Hold Shift during press to trigger connection drawing path
+    raw2.modifiers = egui::Modifiers {
+        shift: true,
+        alt: false,
+        ctrl: false,
+        mac_cmd: false,
+        command: false,
+    };
+    raw2.events = vec![
+        egui::Event::PointerMoved(start),
+        egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = ctx.run(raw2, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 3: drag towards consumer (update preview)
+    let mut raw3 = egui::RawInput::default();
+    raw3.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    // Keep Shift held during drag
+    raw3.modifiers = egui::Modifiers {
+        shift: true,
+        alt: false,
+        ctrl: false,
+        mac_cmd: false,
+        command: false,
+    };
+    raw3.events = vec![egui::Event::PointerMoved(end)];
+    let _ = ctx.run(raw3, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame 4: release primary over consumer to finalize connection
+    let mut raw4 = egui::RawInput::default();
+    raw4.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    // Shift can be released here; not required for finalize
+    raw4.events = vec![egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    }];
+    let _ = ctx.run(raw4, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Assert: exactly one connection Producer -> Consumer exists
+    assert_eq!(app.flowchart.connections.len(), 1, "one connection expected");
+    let conn = &app.flowchart.connections[0];
+    assert_eq!(conn.from, producer_id);
+    assert_eq!(conn.to, consumer_id);
+}
