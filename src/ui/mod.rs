@@ -1995,3 +1995,9 @@ impl FlowchartApp {
         self.file.has_unsaved_changes = true;
     }
 }
+
+// Test module for headless egui-driven UI unit tests.
+// Placed inside the `ui` module so tests can access private methods like
+// `draw_canvas` and `handle_undo_redo_keys` without exposing them publicly.
+#[cfg(test)]
+mod tests;
