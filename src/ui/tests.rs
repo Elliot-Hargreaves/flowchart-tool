@@ -1079,6 +1079,165 @@ fn single_node_drag_undo_redo_round_trip() {
 }
 
 #[test]
+fn tiny_click_on_empty_canvas_does_not_start_marquee_or_select() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1; // avoid auto-centering
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Ensure there's no prior selection
+    assert!(app.interaction.selected_nodes.is_empty());
+    assert!(app.interaction.selected_node.is_none());
+
+    let p = egui::pos2(40.0, 40.0); // empty space
+    let ctx = egui::Context::default();
+
+    // Move → press → release without moving
+    for events in [
+        vec![egui::Event::PointerMoved(p)],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    // No marquee started, no selection made
+    assert!(app.interaction.marquee_start.is_none());
+    assert!(app.interaction.marquee_end.is_none());
+    assert!(app.interaction.selected_nodes.is_empty());
+    assert!(app.interaction.selected_node.is_none());
+    assert!(app.interaction.selected_connection.is_none());
+}
+
+#[test]
+fn click_where_node_and_connection_overlap_prefers_node() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create a producer and consumer with a connection between them
+    let p = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (100.0, 200.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (400.0, 200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Create connection via state (faster than gesture; gesture covered elsewhere)
+    app.flowchart.connections.push(Connection::new(p, c));
+
+    // Place another node such that its rect overlaps the mid-point of the connection
+    // Node size is 100x70 centered on position; set center at the connection midpoint (250, 200)
+    let overlap_node = app.flowchart.add_node(FlowchartNode::new(
+        "X".into(),
+        (250.0, 200.0),
+        NodeType::Transformer {
+            script: "return msg;".into(),
+            selected_outputs: None,
+            globals: Default::default(),
+            initial_globals: Default::default(),
+        },
+    ));
+
+    let click_point = egui::pos2(250.0, 200.0); // inside the overlap node and on the line
+    let ctx = egui::Context::default();
+
+    // Click sequence on the overlapping region
+    for events in [
+        vec![egui::Event::PointerMoved(click_point)],
+        vec![egui::Event::PointerButton { pos: click_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: click_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    // Node selection should win over connection selection per handle_canvas_interactions logic
+    assert_eq!(app.interaction.selected_node, Some(overlap_node));
+    assert!(app.interaction.selected_connection.is_none());
+}
+
+#[test]
+fn create_node_at_pos_records_undo_selects_and_starts_name_edit() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Simulate context menu world position
+    app.context_menu.world_pos = (320.0, 240.0);
+
+    // Producer
+    app.create_node_at_pos(NodeType::Producer {
+        message_template: serde_json::json!({}),
+        start_step: 0,
+        messages_per_cycle: 1,
+        steps_between_cycles: 1,
+        messages_produced: 0,
+    });
+    let created_1 = app.interaction.selected_node.expect("producer should be selected");
+    assert!(app.flowchart.nodes.contains_key(&created_1));
+    assert_eq!(app.interaction.editing_node_name, Some(created_1));
+    assert!(app.undo_history.can_undo());
+    // Quick undo/redo round-trip proves an undo action was recorded
+    app.perform_undo();
+    assert!(!app.flowchart.nodes.contains_key(&created_1));
+    app.perform_redo();
+    assert!(app.flowchart.nodes.contains_key(&created_1));
+
+    // Move position and create Transformer
+    app.context_menu.world_pos = (400.0, 260.0);
+    app.create_node_at_pos(NodeType::Transformer {
+        script: "return msg;".into(),
+        selected_outputs: None,
+        globals: Default::default(),
+        initial_globals: Default::default(),
+    });
+    let created_2 = app.interaction.selected_node.expect("transformer should be selected");
+    assert!(app.flowchart.nodes.contains_key(&created_2));
+    assert_eq!(app.interaction.editing_node_name, Some(created_2));
+    assert!(app.undo_history.can_undo());
+    app.perform_undo();
+    assert!(!app.flowchart.nodes.contains_key(&created_2));
+    app.perform_redo();
+    assert!(app.flowchart.nodes.contains_key(&created_2));
+
+    // Move position and create Consumer
+    app.context_menu.world_pos = (480.0, 300.0);
+    app.create_node_at_pos(NodeType::Consumer { consumption_rate: 1 });
+    let created_3 = app.interaction.selected_node.expect("consumer should be selected");
+    assert!(app.flowchart.nodes.contains_key(&created_3));
+    assert_eq!(app.interaction.editing_node_name, Some(created_3));
+    assert!(app.undo_history.can_undo());
+    app.perform_undo();
+    assert!(!app.flowchart.nodes.contains_key(&created_3));
+    app.perform_redo();
+    assert!(app.flowchart.nodes.contains_key(&created_3));
+}
+
+#[test]
 fn connection_creation_undo_redo_round_trip() {
     let mut app = FlowchartApp::default();
     app.node_counter = 1;
@@ -1174,7 +1333,7 @@ fn context_menu_open_and_click_outside_closes() {
     // Note: draw_context_menu() sets just_opened=false at the end of the frame.
     assert!(!app.context_menu.just_opened, "just_opened is cleared by end of opening frame");
 
-    // Frame: move pointer outside — menu logic will close it (click not required per code)
+    // Frame: move pointer outside (no state change yet)
     let mut r2 = egui::RawInput::default();
     r2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
     r2.events = vec![egui::Event::PointerMoved(outside)];
@@ -1183,7 +1342,19 @@ fn context_menu_open_and_click_outside_closes() {
         egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
     });
 
-    assert!(!app.context_menu.show, "menu should close when pointer moves outside area");
+    // Frame: click outside to close (matches draw_context_menu closing behavior)
+    let mut r3 = egui::RawInput::default();
+    r3.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r3.events = vec![
+        egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+    ];
+    let _ = ctx.run(r3, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    assert!(!app.context_menu.show, "menu should close when clicking outside area");
     assert!(!app.context_menu.just_opened, "just_opened should be cleared by end of frame");
 }
 
