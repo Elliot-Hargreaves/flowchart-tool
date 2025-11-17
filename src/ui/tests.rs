@@ -1620,3 +1620,81 @@ fn transformer_globals_per_node_isolation_and_reload() {
     let staged = &app.interaction.temp_transformer_globals_edits;
     assert_eq!(staged.get("x").map(|s| s.trim()), Some("42"));
 }
+
+#[test]
+fn transformer_globals_cleared_when_switching_to_non_transformer_selection() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create a transformer and a producer
+    let t = app.flowchart.add_node(FlowchartNode::new(
+        "T".into(),
+        (200.0, 200.0),
+        NodeType::Transformer {
+            script: "return msg;".into(),
+            selected_outputs: None,
+            globals: Default::default(),
+            initial_globals: Default::default(),
+        },
+    ));
+    let p = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (320.0, 200.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+
+    // Select transformer and stage a valid edit in the globals buffer
+    app.interaction.selected_node = Some(t);
+    app.interaction.temp_transformer_globals_edits.clear();
+    app.interaction
+        .temp_transformer_globals_edits
+        .insert("k".to_string(), "123".to_string());
+    app.interaction.temp_globals_node_id = Some(t);
+
+    // Draw properties once for transformer (loads/keeps staging)
+    let ctx = egui::Context::default();
+    let mut r0 = egui::RawInput::default();
+    r0.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    let _ = ctx.run(r0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    // Switch selection to Producer and draw properties; this should CLEAR staging, not autosave
+    app.interaction.selected_node = Some(p);
+    let mut r1 = egui::RawInput::default();
+    r1.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    let _ = ctx.run(r1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_properties_panel(ui));
+    });
+
+    // Assert staging has been cleared and node tracking reset
+    assert!(app.interaction.temp_transformer_globals_edits.is_empty());
+    assert!(app.interaction.temp_globals_node_id.is_none());
+
+    // Also ensure no autosave occurred on the transformer when switching to non-transformer
+    let t_node = app.flowchart.nodes.get(&t).unwrap();
+    if let NodeType::Transformer { initial_globals, .. } = &t_node.node_type {
+        assert!(
+            initial_globals.get("k").is_none(),
+            "should not autosave when switching to non-transformer selection"
+        );
+    } else {
+        panic!("t not a transformer");
+    }
+}

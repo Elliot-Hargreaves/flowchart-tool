@@ -620,6 +620,17 @@ impl FlowchartApp {
 
             if let Some(selected_id) = self.interaction.selected_node {
                 if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
+                    // If the currently selected node is NOT a Transformer, clear any
+                    // Transformer globals staging so edits don't linger across types.
+                    if !matches!(node.node_type, NodeType::Transformer { .. }) {
+                        if self.interaction.temp_globals_node_id.is_some()
+                            || !self.interaction.temp_transformer_globals_edits.is_empty()
+                        {
+                            self.interaction.temp_transformer_globals_edits.clear();
+                            self.interaction.temp_globals_node_id = None;
+                        }
+                    }
+
                     ui.label("Type: Node");
                     ui.separator();
 
@@ -644,12 +655,26 @@ impl FlowchartApp {
                     ui.label("Node not found");
                 }
             } else if let Some(conn_idx) = self.interaction.selected_connection {
+                // Non-transformer selection: clear transformer globals staging
+                if self.interaction.temp_globals_node_id.is_some()
+                    || !self.interaction.temp_transformer_globals_edits.is_empty()
+                {
+                    self.interaction.temp_transformer_globals_edits.clear();
+                    self.interaction.temp_globals_node_id = None;
+                }
                 if let Some(connection) = self.flowchart.connections.get(conn_idx) {
                     self.draw_connection_properties(ui, connection);
                 } else {
                     ui.label("Connection not found");
                 }
             } else {
+                // No selection: clear transformer globals staging
+                if self.interaction.temp_globals_node_id.is_some()
+                    || !self.interaction.temp_transformer_globals_edits.is_empty()
+                {
+                    self.interaction.temp_transformer_globals_edits.clear();
+                    self.interaction.temp_globals_node_id = None;
+                }
                 self.draw_no_selection_info(ui);
             }
         });
