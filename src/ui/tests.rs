@@ -990,3 +990,251 @@ fn command_primary_drag_pans_canvas_without_marquee() {
     assert!((after - before).length() > 0.0, "canvas offset should change when panning");
     assert!(app.interaction.marquee_start.is_none(), "marquee should not start during panning");
 }
+
+#[test]
+fn tiny_click_on_node_selects_without_movement() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Add a node at a known position
+    let node_id = app.flowchart.add_node(FlowchartNode::new(
+        "N".into(),
+        (300.0, 240.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let start_pos = app.flowchart.nodes.get(&node_id).unwrap().position;
+
+    let p = egui::pos2(300.0, 240.0);
+    let ctx = egui::Context::default();
+
+    // Move, press, release without moving: should count as a click, not a drag
+    for events in [
+        vec![egui::Event::PointerMoved(p)],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    // Selection set, but position unchanged
+    assert_eq!(app.interaction.selected_node, Some(node_id));
+    let end_pos = app.flowchart.nodes.get(&node_id).unwrap().position;
+    assert_eq!(start_pos, end_pos, "node should not have moved on simple click");
+}
+
+#[test]
+fn single_node_drag_undo_redo_round_trip() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let node_id = app.flowchart.add_node(FlowchartNode::new(
+        "N".into(),
+        (200.0, 180.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let orig = app.flowchart.nodes.get(&node_id).unwrap().position;
+    let start = egui::pos2(orig.0, orig.1);
+    let end = egui::pos2(orig.0 + 60.0, orig.1 + 40.0);
+    let ctx = egui::Context::default();
+
+    // Drag sequence
+    for events in [
+        vec![egui::Event::PointerMoved(start)],
+        vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerMoved(end)],
+        vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    let moved = app.flowchart.nodes.get(&node_id).unwrap().position;
+    assert_ne!(moved, orig, "node should have moved after drag");
+
+    // Undo restores
+    app.perform_undo();
+    let after_undo = app.flowchart.nodes.get(&node_id).unwrap().position;
+    assert_eq!(after_undo, orig, "undo should restore original position");
+
+    // Redo reapplies
+    app.perform_redo();
+    let after_redo = app.flowchart.nodes.get(&node_id).unwrap().position;
+    assert_eq!(after_redo, moved, "redo should reapply moved position");
+}
+
+#[test]
+fn connection_creation_undo_redo_round_trip() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Producer -> Consumer
+    let p = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (180.0, 200.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (360.0, 200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let start = egui::pos2(180.0, 200.0);
+    let end = egui::pos2(360.0, 200.0);
+    let ctx = egui::Context::default();
+
+    // Create connection via Shift-drag
+    for (shift, events) in [
+        (true, vec![egui::Event::PointerMoved(start)]),
+        (true, vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (true, vec![egui::Event::PointerMoved(end)]),
+        (false, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        if shift { raw.modifiers = egui::Modifiers { shift: true, ..Default::default() }; }
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    assert_eq!(app.flowchart.connections.len(), 1, "connection should be created");
+
+    // Undo removes it
+    app.perform_undo();
+    assert!(app.flowchart.connections.is_empty(), "undo should remove connection");
+
+    // Redo restores it
+    app.perform_redo();
+    assert_eq!(app.flowchart.connections.len(), 1, "redo should restore connection");
+    let conn = &app.flowchart.connections[0];
+    assert_eq!(conn.from, p);
+    assert_eq!(conn.to, c);
+}
+
+#[test]
+fn context_menu_open_and_click_outside_closes() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let open_at = egui::pos2(500.0, 400.0);
+    let outside = egui::pos2(50.0, 50.0);
+    let ctx = egui::Context::default();
+
+    // Frame: move to spot
+    let mut r0 = egui::RawInput::default();
+    r0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r0.events = vec![egui::Event::PointerMoved(open_at)];
+    let _ = ctx.run(r0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Frame: secondary click to open menu
+    let mut r1 = egui::RawInput::default();
+    r1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r1.events = vec![
+        egui::Event::PointerButton { pos: open_at, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerButton { pos: open_at, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE },
+    ];
+    let _ = ctx.run(r1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    assert!(app.context_menu.show, "context menu should be shown after right-click");
+    // Note: draw_context_menu() sets just_opened=false at the end of the frame.
+    assert!(!app.context_menu.just_opened, "just_opened is cleared by end of opening frame");
+
+    // Frame: move pointer outside — menu logic will close it (click not required per code)
+    let mut r2 = egui::RawInput::default();
+    r2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r2.events = vec![egui::Event::PointerMoved(outside)];
+    let _ = ctx.run(r2, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    assert!(!app.context_menu.show, "menu should close when pointer moves outside area");
+    assert!(!app.context_menu.just_opened, "just_opened should be cleared by end of frame");
+}
+
+#[test]
+fn auto_layout_changes_positions_and_undo_restores() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Build a tiny graph
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (0.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (50.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (100.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    app.flowchart.connections.push(Connection::new(a, b));
+    app.flowchart.connections.push(Connection::new(b, c));
+
+    let orig_positions: std::collections::HashMap<_, _> = app
+        .flowchart
+        .nodes
+        .iter()
+        .map(|(id, n)| (*id, n.position))
+        .collect();
+
+    // Run auto layout (state-level)
+    app.auto_layout_graph();
+
+    // At least one node should have moved noticeably
+    let moved_any = app
+        .flowchart
+        .nodes
+        .iter()
+        .any(|(id, n)| orig_positions.get(id) != Some(&n.position));
+    assert!(moved_any, "auto layout should change at least one position");
+
+    // Undo should restore all positions
+    app.perform_undo();
+    for (id, pos) in orig_positions {
+        let now = app.flowchart.nodes.get(&id).unwrap().position;
+        assert_eq!(now, pos, "undo should restore position for node {id:?}");
+    }
+}
