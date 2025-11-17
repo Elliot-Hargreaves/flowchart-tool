@@ -11,6 +11,17 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+/// Available auto‑arrangement modes for laying out nodes
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoArrangeMode {
+    /// Physics-based force-directed layout
+    ForceDirected,
+    /// Place nodes in a grid
+    Grid,
+    /// Place nodes in a single horizontal line
+    Line,
+}
+
 /// State related to canvas navigation and display.
 ///
 /// Tracks the current pan offset, zoom level, and display options for the canvas.
@@ -321,6 +332,8 @@ pub struct FlowchartApp {
     /// Whether we've already applied the stored window geometry this session
     #[serde(skip)]
     pub applied_viewport_restore: bool,
+    /// Selected auto-arrangement mode for the toolbar button
+    pub auto_arrange_mode: AutoArrangeMode,
 }
 
 impl Default for FlowchartApp {
@@ -343,6 +356,7 @@ impl Default for FlowchartApp {
             window_inner_size: None,
             last_window_pos: None,
             applied_viewport_restore: false,
+            auto_arrange_mode: AutoArrangeMode::ForceDirected,
         }
     }
 }
@@ -379,6 +393,7 @@ impl FlowchartApp {
             applied_viewport_restore: self.applied_viewport_restore,
             last_window_pos: self.last_window_pos,
             dark_mode: self.dark_mode,
+            auto_arrange_mode: self.auto_arrange_mode,
             ..Default::default()
         };
     }

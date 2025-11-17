@@ -562,10 +562,33 @@ impl FlowchartApp {
 
             ui.separator();
 
-            // Layout operations
+            // Auto-arrange apply button + combo box to choose mode
             if ui.button("Auto Layout").clicked() {
-                self.auto_layout_graph();
+                self.apply_auto_arrangement();
             }
+            egui::ComboBox::from_id_source("auto_arrange_mode_combo")
+                .selected_text(match self.auto_arrange_mode {
+                    crate::ui::state::AutoArrangeMode::ForceDirected => "Force-directed",
+                    crate::ui::state::AutoArrangeMode::Grid => "Grid",
+                    crate::ui::state::AutoArrangeMode::Line => "Line",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.auto_arrange_mode,
+                        crate::ui::state::AutoArrangeMode::ForceDirected,
+                        "Force-directed",
+                    );
+                    ui.selectable_value(
+                        &mut self.auto_arrange_mode,
+                        crate::ui::state::AutoArrangeMode::Grid,
+                        "Grid",
+                    );
+                    ui.selectable_value(
+                        &mut self.auto_arrange_mode,
+                        crate::ui::state::AutoArrangeMode::Line,
+                        "Line",
+                    );
+                });
 
             ui.separator();
 
@@ -1847,6 +1870,16 @@ impl FlowchartApp {
         }
     }
 
+    /// Apply the currently selected auto-arrangement mode to nodes.
+    /// If any nodes are selected, only those nodes are rearranged.
+    fn apply_auto_arrangement(&mut self) {
+        match self.auto_arrange_mode {
+            crate::ui::state::AutoArrangeMode::ForceDirected => self.auto_layout_graph(),
+            crate::ui::state::AutoArrangeMode::Grid => self.grid_layout_selected_or_all(),
+            crate::ui::state::AutoArrangeMode::Line => self.line_layout_selected_or_all(),
+        }
+    }
+
     /// Automatically organizes nodes using a force-directed layout algorithm.
     ///
     /// This method applies forces to nodes to create an aesthetically pleasing layout:
@@ -1861,12 +1894,20 @@ impl FlowchartApp {
             return;
         }
 
-        // Store original positions for undo
-        let old_positions: Vec<(NodeId, (f32, f32))> = self
-            .flowchart
-            .nodes
+        // Determine target nodes: use selected only if multiple are selected; otherwise use all
+        let target_ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
+            self.interaction.selected_nodes.clone()
+        } else {
+            self.flowchart.nodes.keys().copied().collect()
+        };
+        if target_ids.is_empty() {
+            return;
+        }
+
+        // Store original positions for undo (only for affected nodes)
+        let old_positions: Vec<(NodeId, (f32, f32))> = target_ids
             .iter()
-            .map(|(id, node)| (*id, node.position))
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
             .collect();
 
         // Constants for the force-directed algorithm
@@ -1899,12 +1940,12 @@ impl FlowchartApp {
                 std::collections::HashMap::new();
 
             // Initialize all forces to zero
-            for node_id in self.flowchart.nodes.keys() {
+            for node_id in &target_ids {
                 forces.insert(*node_id, (0.0, 0.0));
             }
 
             // Repulsion forces between all pairs of nodes
-            let node_ids: Vec<NodeId> = self.flowchart.nodes.keys().copied().collect();
+            let node_ids: Vec<NodeId> = target_ids.clone();
             for i in 0..node_ids.len() {
                 for j in (i + 1)..node_ids.len() {
                     let id1 = node_ids[i];
@@ -1939,8 +1980,11 @@ impl FlowchartApp {
                 }
             }
 
-            // Attraction forces along connections
+            // Attraction forces along connections within the target set
             for connection in &self.flowchart.connections {
+                if !target_ids.contains(&connection.from) || !target_ids.contains(&connection.to) {
+                    continue;
+                }
                 if let (Some(from_node), Some(to_node)) = (
                     self.flowchart.nodes.get(&connection.from),
                     self.flowchart.nodes.get(&connection.to),
@@ -1980,34 +2024,36 @@ impl FlowchartApp {
             }
         }
 
-        // Center the layout around the origin
-        if !self.flowchart.nodes.is_empty() {
+        // Center the affected nodes around their centroid to avoid shifting unrelated nodes
+        if !target_ids.is_empty() {
             // Calculate center of mass
             let mut center_x = 0.0;
             let mut center_y = 0.0;
-            let node_count = self.flowchart.nodes.len() as f32;
+            let node_count = target_ids.len() as f32;
 
-            for node in self.flowchart.nodes.values() {
-                center_x += node.position.0;
-                center_y += node.position.1;
+            for node_id in &target_ids {
+                if let Some(node) = self.flowchart.nodes.get(node_id) {
+                    center_x += node.position.0;
+                    center_y += node.position.1;
+                }
             }
 
             center_x /= node_count;
             center_y /= node_count;
 
-            // Shift all nodes to center the layout at origin
-            for node in self.flowchart.nodes.values_mut() {
-                node.position.0 -= center_x;
-                node.position.1 -= center_y;
+            // Shift affected nodes to center around their previous centroid
+            for node_id in &target_ids {
+                if let Some(node) = self.flowchart.nodes.get_mut(node_id) {
+                    node.position.0 -= center_x;
+                    node.position.1 -= center_y;
+                }
             }
         }
 
         // Collect new positions after layout
-        let new_positions: Vec<(NodeId, (f32, f32))> = self
-            .flowchart
-            .nodes
+        let new_positions: Vec<(NodeId, (f32, f32))> = target_ids
             .iter()
-            .map(|(id, node)| (*id, node.position))
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
             .collect();
 
         // Record undo action for the layout operation
@@ -2017,6 +2063,135 @@ impl FlowchartApp {
                 new_positions,
             });
 
+        self.file.has_unsaved_changes = true;
+    }
+
+    /// Arrange nodes in a grid. Applies to selected nodes if any, otherwise all.
+    fn grid_layout_selected_or_all(&mut self) {
+        if self.flowchart.nodes.is_empty() {
+            return;
+        }
+        let ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
+            self.interaction.selected_nodes.clone()
+        } else {
+            self.flowchart.nodes.keys().copied().collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+
+        // Constants
+        const NODE_WIDTH: f32 = 100.0;
+        const NODE_HEIGHT: f32 = 70.0;
+        const H_SPACING: f32 = 40.0;
+        const V_SPACING: f32 = 40.0;
+
+        // Compute centroid of current positions to center around
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        for id in &ids {
+            if let Some(n) = self.flowchart.nodes.get(id) {
+                cx += n.position.0;
+                cy += n.position.1;
+            }
+        }
+        cx /= ids.len() as f32;
+        cy /= ids.len() as f32;
+
+        // grid size
+        let n = ids.len();
+        let cols = (n as f32).sqrt().ceil() as usize;
+        let cols = cols.max(1);
+        let rows = ((n + cols - 1) / cols).max(1);
+
+        // grid physical dimensions
+        let cell_w = NODE_WIDTH + H_SPACING;
+        let cell_h = NODE_HEIGHT + V_SPACING;
+        let total_w = (cols as f32 - 1.0) * cell_w;
+        let total_h = (rows as f32 - 1.0) * cell_h;
+        let origin_x = cx - total_w / 2.0;
+        let origin_y = cy - total_h / 2.0;
+
+        let old_positions: Vec<(NodeId, (f32, f32))> = ids
+            .iter()
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
+            .collect();
+
+        for (idx, id) in ids.iter().enumerate() {
+            let r = idx / cols;
+            let c = idx % cols;
+            if let Some(node) = self.flowchart.nodes.get_mut(id) {
+                node.position.0 = origin_x + c as f32 * cell_w;
+                node.position.1 = origin_y + r as f32 * cell_h;
+            }
+        }
+
+        let new_positions: Vec<(NodeId, (f32, f32))> = ids
+            .iter()
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
+            .collect();
+
+        self.undo_history
+            .push_action(UndoAction::MultipleNodesMoved { old_positions, new_positions });
+        self.file.has_unsaved_changes = true;
+    }
+
+    /// Arrange nodes in a horizontal line. Applies to selected nodes if any, otherwise all.
+    fn line_layout_selected_or_all(&mut self) {
+        if self.flowchart.nodes.is_empty() {
+            return;
+        }
+        let mut ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
+            self.interaction.selected_nodes.clone()
+        } else {
+            self.flowchart.nodes.keys().copied().collect()
+        };
+        if ids.is_empty() {
+            return;
+        }
+
+        // Stable order by NodeId (string form)
+        ids.sort_by_key(|id| id.to_string());
+
+        // Constants
+        const NODE_WIDTH: f32 = 100.0;
+        const H_SPACING: f32 = 40.0;
+        let step = NODE_WIDTH + H_SPACING;
+
+        // centroid
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        for id in &ids {
+            if let Some(n) = self.flowchart.nodes.get(id) {
+                cx += n.position.0;
+                cy += n.position.1;
+            }
+        }
+        cx /= ids.len() as f32;
+        cy /= ids.len() as f32;
+
+        let total_w = step * (ids.len().saturating_sub(1)) as f32;
+        let start_x = cx - total_w / 2.0;
+
+        let old_positions: Vec<(NodeId, (f32, f32))> = ids
+            .iter()
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
+            .collect();
+
+        for (i, id) in ids.iter().enumerate() {
+            if let Some(node) = self.flowchart.nodes.get_mut(id) {
+                node.position.0 = start_x + i as f32 * step;
+                node.position.1 = cy;
+            }
+        }
+
+        let new_positions: Vec<(NodeId, (f32, f32))> = ids
+            .iter()
+            .filter_map(|id| self.flowchart.nodes.get(id).map(|n| (*id, n.position)))
+            .collect();
+
+        self.undo_history
+            .push_action(UndoAction::MultipleNodesMoved { old_positions, new_positions });
         self.file.has_unsaved_changes = true;
     }
 }

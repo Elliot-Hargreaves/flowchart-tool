@@ -1,6 +1,7 @@
 use super::*;
 use crate::types::{FlowchartNode, NodeType};
 use eframe::egui;
+use serde_json;
 
 /// Run a single headless egui frame with the provided input events and closure.
 fn run_ui_with(events: Vec<egui::Event>, mut f: impl FnMut(&egui::Context)) -> egui::FullOutput {
@@ -1408,6 +1409,255 @@ fn auto_layout_changes_positions_and_undo_restores() {
         let now = app.flowchart.nodes.get(&id).unwrap().position;
         assert_eq!(now, pos, "undo should restore position for node {id:?}");
     }
+}
+
+#[test]
+fn grid_layout_moves_only_selected_and_undo_restores() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create three nodes in a line
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-200.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (0.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (200.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let orig_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let orig_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let orig_c = app.flowchart.nodes.get(&c).unwrap().position;
+
+    // Select only B and C, apply Grid layout
+    app.interaction.selected_nodes = vec![b, c];
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::Grid;
+    app.apply_auto_arrangement();
+
+    // A should not move; B or C should change
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, orig_a, "unselected node must remain in place");
+    let new_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let new_c = app.flowchart.nodes.get(&c).unwrap().position;
+    assert!(new_b != orig_b || new_c != orig_c, "at least one selected node should move in grid layout");
+
+    // Undo restores positions for B and C (and keeps A unchanged)
+    app.perform_undo();
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, orig_a);
+    assert_eq!(app.flowchart.nodes.get(&b).unwrap().position, orig_b);
+    assert_eq!(app.flowchart.nodes.get(&c).unwrap().position, orig_c);
+}
+
+#[test]
+fn line_layout_moves_only_selected_and_undo_restores() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create three nodes in a triangle-like positions
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-100.0, -100.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (0.0, 50.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (120.0, 30.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let orig_pos = |id: &uuid::Uuid| app.flowchart.nodes.get(id).unwrap().position;
+    let (oa, ob, oc) = (orig_pos(&a), orig_pos(&b), orig_pos(&c));
+
+    // Select all and apply Line layout; all should align horizontally (same y)
+    app.interaction.selected_nodes = vec![a, b, c];
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::Line;
+    app.apply_auto_arrangement();
+
+    let ya = app.flowchart.nodes.get(&a).unwrap().position.1;
+    let yb = app.flowchart.nodes.get(&b).unwrap().position.1;
+    let yc = app.flowchart.nodes.get(&c).unwrap().position.1;
+    assert!((ya - yb).abs() < 0.001 && (yb - yc).abs() < 0.001, "nodes should share the same y on line layout");
+
+    // Undo should restore original positions
+    app.perform_undo();
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, oa);
+    assert_eq!(app.flowchart.nodes.get(&b).unwrap().position, ob);
+    assert_eq!(app.flowchart.nodes.get(&c).unwrap().position, oc);
+}
+
+#[test]
+fn auto_arrange_mode_persists_and_button_applies() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create two nodes so something can move
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (0.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (300.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let orig_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let orig_b = app.flowchart.nodes.get(&b).unwrap().position;
+
+    // Change mode to Grid and simulate pressing the button (apply_auto_arrangement)
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::Grid;
+    app.apply_auto_arrangement();
+
+    // Nodes should have moved from their originals in this simple case
+    let moved = app.flowchart.nodes.get(&a).unwrap().position != orig_a
+        || app.flowchart.nodes.get(&b).unwrap().position != orig_b;
+    assert!(moved, "auto-arrange button should apply the selected mode");
+
+    // Persist to JSON and restore, the mode value should survive
+    let json = app.to_json().expect("serialize app");
+    let restored = FlowchartApp::from_json(&json).expect("deserialize app");
+    assert!(matches!(restored.auto_arrange_mode, crate::ui::state::AutoArrangeMode::Grid));
+}
+
+#[test]
+fn single_selection_applies_to_all_nodes_grid() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Two nodes far apart
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (0.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (400.0, 200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let orig_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let orig_b = app.flowchart.nodes.get(&b).unwrap().position;
+
+    // Select exactly one node and apply Grid layout
+    app.interaction.selected_nodes = vec![a];
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::Grid;
+    app.apply_auto_arrangement();
+
+    // With exactly one selected, layout should apply to ALL nodes
+    let new_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let new_b = app.flowchart.nodes.get(&b).unwrap().position;
+    assert!(new_a != orig_a || new_b != orig_b, "at least one node should move in grid layout");
+    assert!(new_b != orig_b, "unselected node should also be affected when only one node is selected");
+
+    // Undo should restore both
+    app.perform_undo();
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, orig_a);
+    assert_eq!(app.flowchart.nodes.get(&b).unwrap().position, orig_b);
+}
+
+#[test]
+fn single_selection_applies_to_all_nodes_line() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-150.0, 50.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (200.0, -30.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (20.0, 180.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let oa = app.flowchart.nodes.get(&a).unwrap().position;
+    let ob = app.flowchart.nodes.get(&b).unwrap().position;
+    let oc = app.flowchart.nodes.get(&c).unwrap().position;
+
+    // Select exactly one node and apply Line layout
+    app.interaction.selected_nodes = vec![b];
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::Line;
+    app.apply_auto_arrangement();
+
+    // All nodes should align to the same y (line layout), indicating all were affected
+    let ya = app.flowchart.nodes.get(&a).unwrap().position.1;
+    let yb = app.flowchart.nodes.get(&b).unwrap().position.1;
+    let yc = app.flowchart.nodes.get(&c).unwrap().position.1;
+    assert!((ya - yb).abs() < 0.001 && (yb - yc).abs() < 0.001, "all nodes should share the same y after line layout with single selection");
+
+    // Undo restores originals
+    app.perform_undo();
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, oa);
+    assert_eq!(app.flowchart.nodes.get(&b).unwrap().position, ob);
+    assert_eq!(app.flowchart.nodes.get(&c).unwrap().position, oc);
+}
+
+#[test]
+fn single_selection_applies_to_all_nodes_force_directed() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Small chain with connections to exercise attraction
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-100.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (0.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (100.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    app.flowchart.connections.push(Connection::new(a, b));
+    app.flowchart.connections.push(Connection::new(b, c));
+
+    let orig_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let orig_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let orig_c = app.flowchart.nodes.get(&c).unwrap().position;
+
+    // Select exactly one node
+    app.interaction.selected_nodes = vec![b];
+    app.auto_arrange_mode = crate::ui::state::AutoArrangeMode::ForceDirected;
+    app.apply_auto_arrangement();
+
+    // All nodes should be eligible to move; at least one of the unselected should move
+    let new_a = app.flowchart.nodes.get(&a).unwrap().position;
+    let new_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let new_c = app.flowchart.nodes.get(&c).unwrap().position;
+    let moved_any = new_a != orig_a || new_b != orig_b || new_c != orig_c;
+    assert!(moved_any, "force-directed should move at least one node");
+    assert!(new_a != orig_a || new_c != orig_c, "with single selection, unselected nodes may move as well");
+
+    // Undo should restore originals
+    app.perform_undo();
+    assert_eq!(app.flowchart.nodes.get(&a).unwrap().position, orig_a);
+    assert_eq!(app.flowchart.nodes.get(&b).unwrap().position, orig_b);
+    assert_eq!(app.flowchart.nodes.get(&c).unwrap().position, orig_c);
 }
 
 // ===== Properties panel interaction tests =====
