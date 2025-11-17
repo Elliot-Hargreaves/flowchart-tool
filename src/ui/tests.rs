@@ -362,3 +362,383 @@ fn shift_drag_creates_connection_between_nodes() {
     assert_eq!(conn.from, producer_id);
     assert_eq!(conn.to, consumer_id);
 }
+
+#[test]
+fn connection_invalid_when_consumer_is_source() {
+    let mut app = FlowchartApp::default();
+
+    // Deterministic canvas
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Consumer (left) and Transformer (right)
+    let consumer_id = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (160.0, 120.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let transformer_id = app.flowchart.add_node(FlowchartNode::new(
+        "T".into(),
+        (360.0, 120.0),
+        NodeType::Transformer {
+            script: "return msg;".into(),
+            selected_outputs: None,
+            globals: Default::default(),
+            initial_globals: Default::default(),
+        },
+    ));
+
+    let start = egui::pos2(160.0, 120.0); // on consumer
+    let end = egui::pos2(360.0, 120.0); // on transformer
+
+    let ctx = egui::Context::default();
+
+    // Move to start
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw0.events = vec![egui::Event::PointerMoved(start)];
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Press with Shift to start connection from Consumer (should be rejected later)
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw1.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    raw1.events = vec![
+        egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+    ];
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Drag with Shift
+    let mut raw2 = egui::RawInput::default();
+    raw2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw2.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    raw2.events = vec![egui::Event::PointerMoved(end)];
+    let _ = ctx.run(raw2, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Release
+    let mut raw3 = egui::RawInput::default();
+    raw3.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw3.events = vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(raw3, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // No connections should be created
+    assert!(app.flowchart.connections.is_empty(), "Consumer cannot be a source");
+
+    // Silence unused warnings for ids
+    let _ = (consumer_id, transformer_id);
+}
+
+#[test]
+fn connection_invalid_when_target_is_producer() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Transformer (left) and Producer (right)
+    let transformer_id = app.flowchart.add_node(FlowchartNode::new(
+        "T".into(),
+        (160.0, 120.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let producer_id = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (360.0, 120.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+
+    let start = egui::pos2(160.0, 120.0);
+    let end = egui::pos2(360.0, 120.0);
+
+    let ctx = egui::Context::default();
+
+    // Move to start
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw0.events = vec![egui::Event::PointerMoved(start)];
+    let _ = ctx.run(raw0, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Press with Shift to start connection
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw1.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    raw1.events = vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(raw1, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Drag with Shift to Producer (invalid target)
+    let mut raw2 = egui::RawInput::default();
+    raw2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw2.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    raw2.events = vec![egui::Event::PointerMoved(end)];
+    let _ = ctx.run(raw2, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    // Release
+    let mut raw3 = egui::RawInput::default();
+    raw3.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw3.events = vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(raw3, |ctx| {
+        ctx.set_visuals(egui::Visuals::dark());
+        egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+    });
+
+    assert!(app.flowchart.connections.is_empty(), "Producer cannot be a target");
+
+    let _ = (transformer_id, producer_id);
+}
+
+#[test]
+fn connection_rejects_self_connection() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // A single transformer node
+    let node_id = app.flowchart.add_node(FlowchartNode::new(
+        "T".into(),
+        (260.0, 140.0),
+        NodeType::Transformer { script: "return msg".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    let p = egui::pos2(260.0, 140.0);
+    let ctx = egui::Context::default();
+
+    // Hover
+    let mut raw0 = egui::RawInput::default();
+    raw0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw0.events = vec![egui::Event::PointerMoved(p)];
+    let _ = ctx.run(raw0, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Press with Shift to start connection
+    let mut raw1 = egui::RawInput::default();
+    raw1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw1.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    raw1.events = vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(raw1, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Release immediately over same node
+    let mut raw2 = egui::RawInput::default();
+    raw2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    raw2.events = vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(raw2, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    assert!(app.flowchart.connections.is_empty(), "self-connection must be rejected");
+
+    let _ = node_id;
+}
+
+#[test]
+fn connection_duplicate_is_prevented() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let producer_id = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (150.0, 100.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let consumer_id = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (350.0, 100.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let start = egui::pos2(150.0, 100.0);
+    let end = egui::pos2(350.0, 100.0);
+
+    let ctx = egui::Context::default();
+
+    // First creation
+    for (mods_shift, events) in [
+        (true, vec![egui::Event::PointerMoved(start)]),
+        (true, vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (true, vec![egui::Event::PointerMoved(end)]),
+        (false, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        if mods_shift { raw.modifiers = egui::Modifiers { shift: true, ..Default::default() }; }
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+
+    assert_eq!(app.flowchart.connections.len(), 1);
+
+    // Attempt to create duplicate
+    for (mods_shift, events) in [
+        (true, vec![egui::Event::PointerMoved(start)]),
+        (true, vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (true, vec![egui::Event::PointerMoved(end)]),
+        (false, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        if mods_shift { raw.modifiers = egui::Modifiers { shift: true, ..Default::default() }; }
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+
+    assert_eq!(app.flowchart.connections.len(), 1, "duplicate connection must not be added");
+
+    let _ = (producer_id, consumer_id);
+}
+
+#[test]
+fn click_near_connection_selects_it() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Build a connection first
+    let producer_id = app.flowchart.add_node(FlowchartNode::new(
+        "P".into(),
+        (200.0, 200.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let consumer_id = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (400.0, 220.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Create the connection via shift-drag
+    let start = egui::pos2(200.0, 200.0);
+    let end = egui::pos2(400.0, 220.0);
+    let ctx = egui::Context::default();
+
+    for (mods_shift, events) in [
+        (true, vec![egui::Event::PointerMoved(start)]),
+        (true, vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (true, vec![egui::Event::PointerMoved(end)]),
+        (false, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        if mods_shift { raw.modifiers = egui::Modifiers { shift: true, ..Default::default() }; }
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+
+    assert_eq!(app.flowchart.connections.len(), 1);
+
+    // Compute a click point near the mid-point of the connection, offset by 5px perpendicular
+    let mid = egui::pos2((200.0 + 400.0) * 0.5, (200.0 + 220.0) * 0.5);
+    let dir = egui::vec2(400.0 - 200.0, 220.0 - 200.0).normalized();
+    let normal = egui::vec2(-dir.y, dir.x); // perpendicular
+    let near_point = mid + normal * 5.0; // within CLICK_THRESHOLD=10.0
+
+    // Click sequence: move -> press -> release on near_point
+    // Use multi-frame and rely on response.clicked() path in handle_canvas_interactions
+    // Frame: move
+    let mut r0 = egui::RawInput::default();
+    r0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r0.events = vec![egui::Event::PointerMoved(near_point)];
+    let _ = ctx.run(r0, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Frame: press
+    let mut r1 = egui::RawInput::default();
+    r1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r1.events = vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(r1, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Frame: release
+    let mut r2 = egui::RawInput::default();
+    r2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r2.events = vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(r2, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    assert_eq!(app.interaction.selected_connection, Some(0), "click near line should select it");
+
+    let _ = (producer_id, consumer_id);
+}
+
+#[test]
+fn shift_snap_drag_snaps_to_grid() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Node at an off-grid center
+    let node_id = app.flowchart.add_node(FlowchartNode::new(
+        "N".into(),
+        (105.0, 95.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    let start = egui::pos2(105.0, 95.0);
+    let drag_to = egui::pos2(173.0, 162.0);
+    let ctx = egui::Context::default();
+
+    // Frame: move to node
+    let mut r0 = egui::RawInput::default();
+    r0.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r0.events = vec![egui::Event::PointerMoved(start)];
+    let _ = ctx.run(r0, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Frame: press primary WITHOUT shift to start drag (shift would start connection)
+    let mut r1 = egui::RawInput::default();
+    r1.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r1.events = vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(r1, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Frame: drag with Shift held to new location to trigger snapping
+    let mut r2 = egui::RawInput::default();
+    r2.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r2.modifiers = egui::Modifiers { shift: true, ..Default::default() };
+    r2.events = vec![egui::Event::PointerMoved(drag_to)];
+    let _ = ctx.run(r2, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Frame: release
+    let mut r3 = egui::RawInput::default();
+    r3.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+    r3.events = vec![egui::Event::PointerButton { pos: drag_to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }];
+    let _ = ctx.run(r3, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+
+    // Assert snapped to grid of 20x20
+    let node = app.flowchart.nodes.get(&node_id).unwrap();
+    let (x, y) = node.position;
+    assert!((x % 20.0).abs() < 0.001, "x not snapped: {x}");
+    assert!((y % 20.0).abs() < 0.001, "y not snapped: {y}");
+}
+
+// NOTE: A scroll-driven zoom test is skipped for egui 0.32 because
+// the stable way to synthesize scroll that feeds `smooth_scroll_delta`
+// differs across versions. We'll add this later once we standardize
+// an input helper for scroll on 0.32.
