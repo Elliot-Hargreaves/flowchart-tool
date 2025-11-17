@@ -1533,6 +1533,272 @@ fn auto_arrange_mode_persists_and_button_applies() {
 }
 
 #[test]
+fn line_layout_orders_connected_nodes_adjacent() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create four nodes, with a chain A->B->C and D isolated
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-200.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (0.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (200.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let d = app.flowchart.add_node(FlowchartNode::new(
+        "D".into(),
+        (400.0, 0.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    app.flowchart.connections.push(Connection::new(a, b));
+    app.flowchart.connections.push(Connection::new(b, c));
+
+    // Apply line layout to all
+    app.interaction.selected_nodes.clear(); // single-selection rule: 0 or 1 -> all nodes
+    app.line_layout_selected_or_all();
+
+    // Sort nodes by x to extract the line order
+    let mut order: Vec<(NodeId, f32)> = vec![a, b, c, d]
+        .into_iter()
+        .map(|id| (id, app.flowchart.nodes.get(&id).unwrap().position.0))
+        .collect();
+    order.sort_by(|(_, x1), (_, x2)| x1.partial_cmp(x2).unwrap());
+
+    let idx = |id: NodeId| order.iter().position(|(nid, _)| *nid == id).unwrap();
+    // Connected nodes in the chain should be adjacent in the linear order
+    assert_eq!((idx(a) as isize - idx(b) as isize).abs(), 1, "A and B should be adjacent on the line");
+    assert_eq!((idx(b) as isize - idx(c) as isize).abs(), 1, "B and C should be adjacent on the line");
+}
+
+#[test]
+fn grid_layout_places_connected_nodes_close() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create a 5-node chain A->B->C->D->E
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-300.0, -150.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (-150.0, -50.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (0.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let d = app.flowchart.add_node(FlowchartNode::new(
+        "D".into(),
+        (150.0, 50.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let e = app.flowchart.add_node(FlowchartNode::new(
+        "E".into(),
+        (300.0, 150.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    app.flowchart.connections.push(Connection::new(a, b));
+    app.flowchart.connections.push(Connection::new(b, c));
+    app.flowchart.connections.push(Connection::new(c, d));
+    app.flowchart.connections.push(Connection::new(d, e));
+
+    app.interaction.selected_nodes.clear();
+    app.grid_layout_selected_or_all();
+
+    // Constants mirrored from layout for expected close distances
+    const NODE_WIDTH: f32 = 100.0;
+    const NODE_HEIGHT: f32 = 70.0;
+    const H_SPACING: f32 = 40.0;
+    const V_SPACING: f32 = 40.0;
+    let cell_w = NODE_WIDTH + H_SPACING; // 140
+    let cell_h = NODE_HEIGHT + V_SPACING; // 110
+
+    let pos = |id: NodeId| app.flowchart.nodes.get(&id).unwrap().position;
+    let dist = |p: (f32, f32), q: (f32, f32)| {
+        let dx = p.0 - q.0;
+        let dy = p.1 - q.1;
+        (dx * dx + dy * dy).sqrt()
+    };
+
+    // Each connected pair in the chain should be within one cell move (adjacent horizontally or vertically in snake grid)
+    assert!(dist(pos(a), pos(b)) <= cell_w.max(cell_h) + 1.0, "A-B should be close in grid");
+    assert!(dist(pos(b), pos(c)) <= cell_w.max(cell_h) + 1.0, "B-C should be close in grid");
+    assert!(dist(pos(c), pos(d)) <= cell_w.max(cell_h) + 1.0, "C-D should be close in grid");
+    assert!(dist(pos(d), pos(e)) <= cell_w.max(cell_h) + 1.0, "D-E should be close in grid");
+
+    // Non-adjacent endpoints should be farther apart than one cell
+    assert!(dist(pos(a), pos(e)) > cell_w.max(cell_h) + 1.0, "Endpoints should not be adjacent in grid");
+}
+
+#[test]
+fn grid_layout_is_idempotent_all_nodes() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create 6 nodes with some scattered positions and a few connections
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-200.0, -100.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (-50.0, 150.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (0.0, 0.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let d = app.flowchart.add_node(FlowchartNode::new(
+        "D".into(),
+        (220.0, -40.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let e = app.flowchart.add_node(FlowchartNode::new(
+        "E".into(),
+        (300.0, 200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let f = app.flowchart.add_node(FlowchartNode::new(
+        "F".into(),
+        (80.0, -200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    app.flowchart.connections.push(Connection::new(a, b));
+    app.flowchart.connections.push(Connection::new(b, c));
+    app.flowchart.connections.push(Connection::new(c, d));
+    app.flowchart.connections.push(Connection::new(e, f));
+
+    // Apply grid layout to all nodes twice
+    app.interaction.selected_nodes.clear();
+    app.grid_layout_selected_or_all();
+    let after_first: std::collections::HashMap<_, _> =
+        [a, b, c, d, e, f].into_iter().map(|id| (id, app.flowchart.nodes.get(&id).unwrap().position)).collect();
+    app.grid_layout_selected_or_all();
+    let after_second: std::collections::HashMap<_, _> =
+        [a, b, c, d, e, f].into_iter().map(|id| (id, app.flowchart.nodes.get(&id).unwrap().position)).collect();
+
+    for id in [a, b, c, d, e, f] {
+        let p1 = after_first.get(&id).unwrap();
+        let p2 = after_second.get(&id).unwrap();
+        assert!((p1.0 - p2.0).abs() < 1e-5 && (p1.1 - p2.1).abs() < 1e-5, "positions should be identical on repeated grid layout");
+    }
+}
+
+#[test]
+fn grid_layout_is_idempotent_for_multi_selection() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Four nodes; will only arrange two selected ones
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-100.0, -50.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (150.0, 60.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (300.0, -120.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+    let d = app.flowchart.add_node(FlowchartNode::new(
+        "D".into(),
+        (-250.0, 200.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Select B and C only
+    app.interaction.selected_nodes = vec![b, c];
+    app.grid_layout_selected_or_all();
+    let first_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let first_c = app.flowchart.nodes.get(&c).unwrap().position;
+    let a_after1 = app.flowchart.nodes.get(&a).unwrap().position;
+    let d_after1 = app.flowchart.nodes.get(&d).unwrap().position;
+
+    app.grid_layout_selected_or_all();
+    let second_b = app.flowchart.nodes.get(&b).unwrap().position;
+    let second_c = app.flowchart.nodes.get(&c).unwrap().position;
+    let a_after2 = app.flowchart.nodes.get(&a).unwrap().position;
+    let d_after2 = app.flowchart.nodes.get(&d).unwrap().position;
+
+    // Selected nodes stable, unselected unchanged
+    assert!((first_b.0 - second_b.0).abs() < 1e-5 && (first_b.1 - second_b.1).abs() < 1e-5);
+    assert!((first_c.0 - second_c.0).abs() < 1e-5 && (first_c.1 - second_c.1).abs() < 1e-5);
+    assert_eq!(a_after1, a_after2);
+    assert_eq!(d_after1, d_after2);
+}
+
+#[test]
+fn grid_layout_centers_around_pre_layout_center() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Three nodes in an L shape so bounding-box center is easy to compute
+    let a = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (-300.0, 0.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (100.0, 200.0),
+        NodeType::Transformer { script: "return msg;".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let c = app.flowchart.add_node(FlowchartNode::new(
+        "C".into(),
+        (50.0, -150.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Pre-layout bounding-box center
+    let xs = [-300.0_f32, 100.0, 50.0];
+    let ys = [0.0_f32, 200.0, -150.0];
+    let min_x = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let min_y = ys.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_y = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let pre_cx = (min_x + max_x) * 0.5;
+    let pre_cy = (min_y + max_y) * 0.5;
+
+    app.interaction.selected_nodes.clear();
+    app.grid_layout_selected_or_all();
+
+    // Post-layout centroid should match pre-layout bounding-box center closely
+    let positions = [a, b, c].into_iter().map(|id| app.flowchart.nodes.get(&id).unwrap().position).collect::<Vec<_>>();
+    let mut post_cx = 0.0;
+    let mut post_cy = 0.0;
+    for p in &positions {
+        post_cx += p.0;
+        post_cy += p.1;
+    }
+    post_cx /= positions.len() as f32;
+    post_cy /= positions.len() as f32;
+
+    assert!((post_cx - pre_cx).abs() < 1e-4, "x center should be preserved");
+    assert!((post_cy - pre_cy).abs() < 1e-4, "y center should be preserved");
+}
+
+#[test]
 fn single_selection_applies_to_all_nodes_grid() {
     let mut app = FlowchartApp::default();
     app.node_counter = 1;

@@ -1880,6 +1880,159 @@ impl FlowchartApp {
         }
     }
 
+    /// Compute an adjacency-aware ordering of the given nodes so that connected
+    /// nodes are placed next to each other when laid out linearly.
+    ///
+    /// Strategy:
+    /// - Work per connected component (undirected) for determinism.
+    /// - Within a component, try a Kahn topological order on the induced directed subgraph.
+    /// - If cycles remain, append the remaining nodes using a BFS over the undirected graph.
+    /// - Tie-breakers are resolved by NodeId string to keep order stable across runs.
+    fn adjacency_aware_order(&self, ids: &[NodeId]) -> Vec<NodeId> {
+        use std::collections::{HashMap, HashSet, VecDeque};
+
+        let id_set: HashSet<NodeId> = ids.iter().copied().collect();
+        if id_set.is_empty() {
+            return Vec::new();
+        }
+
+        // Build directed adjacency and in-degree within the target set
+        let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        let mut in_deg: HashMap<NodeId, usize> = HashMap::new();
+        for id in &id_set {
+            out.insert(*id, Vec::new());
+            in_deg.insert(*id, 0);
+        }
+        for c in &self.flowchart.connections {
+            if id_set.contains(&c.from) && id_set.contains(&c.to) {
+                out.get_mut(&c.from).unwrap().push(c.to);
+                *in_deg.get_mut(&c.to).unwrap() += 1;
+            }
+        }
+
+        // Undirected adjacency for components and BFS fallback
+        let mut undirected: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for id in &id_set {
+            undirected.insert(*id, Vec::new());
+        }
+        for c in &self.flowchart.connections {
+            if id_set.contains(&c.from) && id_set.contains(&c.to) {
+                undirected.get_mut(&c.from).unwrap().push(c.to);
+                undirected.get_mut(&c.to).unwrap().push(c.from);
+            }
+        }
+
+        // Find connected components (undirected)
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        let mut components: Vec<Vec<NodeId>> = Vec::new();
+        let mut ids_sorted: Vec<NodeId> = id_set.iter().copied().collect();
+        ids_sorted.sort_by_key(|id| id.to_string());
+        for start in ids_sorted {
+            if seen.contains(&start) {
+                continue;
+            }
+            let mut comp = Vec::new();
+            let mut q = VecDeque::new();
+            seen.insert(start);
+            q.push_back(start);
+            while let Some(n) = q.pop_front() {
+                comp.push(n);
+                if let Some(neis) = undirected.get(&n) {
+                    for &m in neis {
+                        if !seen.contains(&m) {
+                            seen.insert(m);
+                            q.push_back(m);
+                        }
+                    }
+                }
+            }
+            comp.sort_by_key(|id| id.to_string());
+            components.push(comp);
+        }
+
+        // Order components by smallest id for determinism
+        components.sort_by_key(|comp| comp.first().map(|id| id.to_string()).unwrap_or_default());
+
+        let mut result = Vec::with_capacity(id_set.len());
+        for comp in components {
+            // Kahn's algorithm on the component
+            let mut local_in: HashMap<NodeId, isize> = HashMap::new();
+            for &n in &comp {
+                local_in.insert(n, *in_deg.get(&n).unwrap_or(&0) as isize);
+            }
+            let mut zero: Vec<NodeId> = comp
+                .iter()
+                .copied()
+                .filter(|n| local_in.get(n).copied().unwrap_or(0) == 0)
+                .collect();
+            zero.sort_by_key(|id| id.to_string());
+
+            while let Some(n) = zero.pop() {
+                if result.contains(&n) { // can happen across comps only if overlaps, but safe
+                    continue;
+                }
+                result.push(n);
+                if let Some(neis) = out.get(&n) {
+                    for &m in neis {
+                        if !local_in.contains_key(&m) { continue; }
+                        let entry = local_in.get_mut(&m).unwrap();
+                        *entry -= 1;
+                        if *entry == 0 {
+                            // Insert maintaining sort on id string; push then sort as list is small
+                            zero.push(m);
+                            zero.sort_by_key(|id| id.to_string());
+                        }
+                    }
+                }
+            }
+
+            // If there are nodes not yet placed (cycles), do an undirected BFS from the smallest remaining
+            let comp_set: HashSet<NodeId> = comp.iter().copied().collect();
+            let mut remaining: Vec<NodeId> = comp
+                .iter()
+                .copied()
+                .filter(|n| !result.contains(n))
+                .collect();
+            remaining.sort_by_key(|id| id.to_string());
+            while let Some(seed) = remaining.first().copied() {
+                // BFS
+                let mut q = VecDeque::new();
+                q.push_back(seed);
+                let mut local_seen: HashSet<NodeId> = HashSet::new();
+                local_seen.insert(seed);
+                while let Some(n) = q.pop_front() {
+                    if !result.contains(&n) {
+                        result.push(n);
+                    }
+                    if let Some(neis) = undirected.get(&n) {
+                        // deterministic neighbor order
+                        let mut sorted = neis
+                            .iter()
+                            .copied()
+                            .filter(|m| comp_set.contains(m))
+                            .collect::<Vec<_>>();
+                        sorted.sort_by_key(|id| id.to_string());
+                        for m in sorted {
+                            if !local_seen.contains(&m) && !result.contains(&m) {
+                                local_seen.insert(m);
+                                q.push_back(m);
+                            }
+                        }
+                    }
+                }
+                remaining = comp
+                    .iter()
+                    .copied()
+                    .filter(|n| !result.contains(n))
+                    .collect();
+                remaining.sort_by_key(|id| id.to_string());
+            }
+        }
+
+        // Finally, filter to original ids order domain (result already from ids) and return
+        result
+    }
+
     /// Automatically organizes nodes using a force-directed layout algorithm.
     ///
     /// This method applies forces to nodes to create an aesthetically pleasing layout:
@@ -2067,15 +2220,19 @@ impl FlowchartApp {
     }
 
     /// Arrange nodes in a grid. Applies to selected nodes if any, otherwise all.
+    ///
+    /// The grid is anchored around the pre-layout central position of the targeted
+    /// nodes to avoid drift when applying the layout multiple times.
     fn grid_layout_selected_or_all(&mut self) {
         if self.flowchart.nodes.is_empty() {
             return;
         }
-        let ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
+        let base_ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
             self.interaction.selected_nodes.clone()
         } else {
             self.flowchart.nodes.keys().copied().collect()
         };
+        let ids = self.adjacency_aware_order(&base_ids);
         if ids.is_empty() {
             return;
         }
@@ -2086,17 +2243,23 @@ impl FlowchartApp {
         const H_SPACING: f32 = 40.0;
         const V_SPACING: f32 = 40.0;
 
-        // Compute centroid of current positions to center around
-        let mut cx = 0.0;
-        let mut cy = 0.0;
+        // Compute pre-layout center to anchor the grid around in order to prevent drift.
+        // We use the center of the bounding box of the targeted nodes for a more visually
+        // stable anchor than the arithmetic mean when the last row is partial.
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
         for id in &ids {
             if let Some(n) = self.flowchart.nodes.get(id) {
-                cx += n.position.0;
-                cy += n.position.1;
+                min_x = min_x.min(n.position.0);
+                max_x = max_x.max(n.position.0);
+                min_y = min_y.min(n.position.1);
+                max_y = max_y.max(n.position.1);
             }
         }
-        cx /= ids.len() as f32;
-        cy /= ids.len() as f32;
+        let cx = if min_x.is_finite() && max_x.is_finite() { (min_x + max_x) * 0.5 } else { 0.0 };
+        let cy = if min_y.is_finite() && max_y.is_finite() { (min_y + max_y) * 0.5 } else { 0.0 };
 
         // grid size
         let n = ids.len();
@@ -2120,9 +2283,37 @@ impl FlowchartApp {
         for (idx, id) in ids.iter().enumerate() {
             let r = idx / cols;
             let c = idx % cols;
+            let c = if r % 2 == 1 { cols - 1 - c } else { c }; // snake order to keep adjacents close between rows
             if let Some(node) = self.flowchart.nodes.get_mut(id) {
                 node.position.0 = origin_x + c as f32 * cell_w;
                 node.position.1 = origin_y + r as f32 * cell_h;
+            }
+        }
+
+        // After placement, compute the actual centroid and adjust by any tiny delta
+        // to align precisely with the pre-layout center. This guards against tiny
+        // floating point accumulation or asymmetries, ensuring idempotency.
+        let mut post_cx = 0.0;
+        let mut post_cy = 0.0;
+        for id in &ids {
+            if let Some(n) = self.flowchart.nodes.get(id) {
+                post_cx += n.position.0;
+                post_cy += n.position.1;
+            }
+        }
+        let count = ids.len() as f32;
+        if count > 0.0 {
+            post_cx /= count;
+            post_cy /= count;
+            let dx = cx - post_cx;
+            let dy = cy - post_cy;
+            if dx.abs() > f32::EPSILON || dy.abs() > f32::EPSILON {
+                for id in &ids {
+                    if let Some(n) = self.flowchart.nodes.get_mut(id) {
+                        n.position.0 += dx;
+                        n.position.1 += dy;
+                    }
+                }
             }
         }
 
@@ -2141,17 +2332,15 @@ impl FlowchartApp {
         if self.flowchart.nodes.is_empty() {
             return;
         }
-        let mut ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
+        let ids_base: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
             self.interaction.selected_nodes.clone()
         } else {
             self.flowchart.nodes.keys().copied().collect()
         };
+        let ids = self.adjacency_aware_order(&ids_base);
         if ids.is_empty() {
             return;
         }
-
-        // Stable order by NodeId (string form)
-        ids.sort_by_key(|id| id.to_string());
 
         // Constants
         const NODE_WIDTH: f32 = 100.0;
