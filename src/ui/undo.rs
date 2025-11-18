@@ -79,6 +79,16 @@ pub enum UndoAction {
         /// The new node name
         new_name: String,
     },
+    /// A group was deleted
+    GroupDeleted {
+        /// The full group data that was deleted
+        group: Group,
+    },
+    /// A group was created
+    GroupCreated {
+        /// The unique identifier of the new group
+        group_id: GroupId,
+    },
 }
 
 /// Manages undo/redo history for the application.
@@ -338,6 +348,20 @@ impl UndoableFlowchart for Flowchart {
                         old_name: new_name.clone(),
                         new_name: old_name.clone(),
                     })
+                } else {
+                    None
+                }
+            }
+            UndoAction::GroupDeleted { group } => {
+                // Restore the deleted group
+                self.groups.insert(group.id, group.clone());
+                // Redo would delete it again
+                Some(UndoAction::GroupCreated { group_id: group.id })
+            }
+            UndoAction::GroupCreated { group_id } => {
+                // Remove the created group
+                if let Some(group) = self.groups.remove(group_id) {
+                    Some(UndoAction::GroupDeleted { group })
                 } else {
                     None
                 }

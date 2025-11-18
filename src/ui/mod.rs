@@ -499,6 +499,32 @@ impl FlowchartApp {
         let is_editing_text = ctx.wants_keyboard_input();
 
         if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !is_editing_text {
+            // If a group is selected, delete the group (but keep its nodes and connections)
+            if let Some(gid) = self.interaction.selected_group {
+                // If we are currently editing this group's name, ignore Delete to avoid accidental removal
+                if self.interaction.editing_group_name == Some(gid) {
+                    return;
+                }
+                if let Some(group) = self.flowchart.groups.get(&gid).cloned() {
+                    // Record undo action before deletion
+                    self.undo_history
+                        .push_action(UndoAction::GroupDeleted { group: group.clone() });
+
+                    // Perform deletion of the group only
+                    self.flowchart.groups.remove(&gid);
+
+                    // Clear group selection/editing state
+                    self.interaction.selected_group = None;
+                    if self.interaction.editing_group_name == Some(gid) {
+                        self.interaction.editing_group_name = None;
+                        self.interaction.temp_group_name.clear();
+                    }
+
+                    self.file.has_unsaved_changes = true;
+                    return; // handled delete key
+                }
+            }
+
             // If multiple nodes are selected, delete them together
             if self.interaction.selected_nodes.len() > 1 {
                 // Capture nodes and connections for undo
@@ -788,8 +814,8 @@ impl FlowchartApp {
                             self.select_all_text_in_field_with_len(ui, response.id, self.interaction.temp_group_name.len());
                         }
 
-                        // Handle Enter key to save changes
-                        if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        // Handle Enter key to save changes (don't require focus in case it's the first frame)
+                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             // Commit change
                             if let Some(g) = self.flowchart.groups.get_mut(&gid) {
                                 let old_name = g.name.clone();

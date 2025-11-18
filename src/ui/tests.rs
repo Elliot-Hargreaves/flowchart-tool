@@ -253,6 +253,334 @@ fn rendering_group_label_smoke() {
 }
 
 #[test]
+fn delete_selected_group_removes_group_only() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1; // stabilize canvas
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create nodes
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    // Create group manually
+    let gid = uuid::Uuid::new_v4();
+    app.flowchart.groups.insert(
+        gid,
+        crate::types::Group {
+            id: gid,
+            name: "G".into(),
+            members: vec![n1, n2],
+        },
+    );
+    app.interaction.selected_group = Some(gid);
+
+    // Send Delete key in a frame and call handler
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw.events = vec![egui::Event::Key {
+        key: egui::Key::Delete,
+        physical_key: Some(egui::Key::Delete),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }];
+    let _ = ctx.run(raw, |ctx| {
+        app.handle_delete_key(ctx);
+    });
+
+    // Group removed, nodes remain
+    assert!(app.flowchart.groups.get(&gid).is_none());
+    assert!(app.flowchart.nodes.contains_key(&n1));
+    assert!(app.flowchart.nodes.contains_key(&n2));
+}
+
+#[test]
+fn undo_redo_group_deletion_roundtrip() {
+    let mut app = FlowchartApp::default();
+
+    // Create nodes and a group
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let gid = uuid::Uuid::new_v4();
+    let group = crate::types::Group { id: gid, name: "G".into(), members: vec![n1, n2] };
+    app.flowchart.groups.insert(gid, group.clone());
+    app.interaction.selected_group = Some(gid);
+
+    // Delete via handler directly (no text editing)
+    let ctx = egui::Context::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        // simulate key pressed state using direct call; the handler checks key_pressed,
+        // so feed an event frame now:
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1200.0, 800.0),
+        ));
+    });
+    // Simpler: call push_action + remove directly to avoid input coupling
+    app.undo_history.push_action(UndoAction::GroupDeleted { group: group.clone() });
+    app.flowchart.groups.remove(&gid);
+
+    assert!(app.flowchart.groups.get(&gid).is_none());
+
+    // Undo should restore group
+    app.perform_undo();
+    assert!(app.flowchart.groups.get(&gid).is_some());
+    let restored = app.flowchart.groups.get(&gid).unwrap();
+    assert_eq!(restored.name, "G");
+    assert_eq!(restored.members.len(), 2);
+
+    // Redo should delete again
+    app.perform_redo();
+    assert!(app.flowchart.groups.get(&gid).is_none());
+}
+
+#[test]
+fn delete_key_ignored_while_editing_group_name() {
+    let mut app = FlowchartApp::default();
+
+    // Create node and group
+    let n = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "N".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let gid = uuid::Uuid::new_v4();
+    app.flowchart.groups.insert(
+        gid,
+        crate::types::Group { id: gid, name: "Group 1".into(), members: vec![n] },
+    );
+    app.interaction.selected_group = Some(gid);
+    app.interaction.editing_group_name = Some(gid);
+    app.interaction.temp_group_name = "Group 1".into();
+    app.interaction.should_select_text = true;
+    app.interaction.focus_requested_for_edit = false;
+
+    // Frame 1: draw properties panel to request focus
+    let _ = run_ui_with(Vec::new(), |ctx| {
+        egui::SidePanel::right("prop").show(ctx, |ui| {
+            app.draw_properties_panel(ui);
+        });
+    });
+
+    // Frame 2: send Delete key and call handler; since a text edit has focus,
+    // ctx.wants_keyboard_input() should be true and the handler should not delete the group.
+    let mut events = Vec::new();
+    events.push(egui::Event::Key {
+        key: egui::Key::Delete,
+        physical_key: Some(egui::Key::Delete),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    let _ = run_ui_with(events, |ctx| {
+        // Render the properties panel again to keep the text edit focused
+        egui::SidePanel::right("prop").show(ctx, |ui| {
+            app.draw_properties_panel(ui);
+        });
+        app.handle_delete_key(ctx);
+    });
+
+    // Group should still exist
+    assert!(app.flowchart.groups.get(&gid).is_some());
+}
+
+#[test]
+fn group_rename_persists_after_deselect_and_reselect() {
+    let mut app = FlowchartApp::default();
+
+    // Stabilize canvas mapping: screen == world, and prevent first-frame auto-centering
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Create two nodes to form a non-empty group rect
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    // Select nodes and create a group via Cmd/Ctrl+G
+    app.interaction.selected_nodes = vec![n1, n2];
+    app.interaction.selected_node = None;
+
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw.events = vec![egui::Event::Key {
+        key: egui::Key::G,
+        physical_key: Some(egui::Key::G),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+    }];
+    let _ = ctx.run(raw, |ctx| {
+        app.handle_group_shortcuts(ctx);
+    });
+
+    let gid = app
+        .interaction
+        .selected_group
+        .expect("group should be selected after creation");
+
+    // Begin editing the group name and set a new name
+    app.interaction.editing_group_name = Some(gid);
+    app.interaction.temp_group_name = "Renamed Group".into();
+    app.interaction.should_select_text = false;
+    app.interaction.focus_requested_for_edit = false;
+
+    // Commit rename via Enter in the properties panel
+    let _ = run_ui_with(
+        vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        |ctx| {
+            egui::SidePanel::right("prop").show(ctx, |ui| {
+                app.draw_properties_panel(ui);
+            });
+        },
+    );
+
+    // Verify the new name was applied and edit mode ended
+    let g_after = app.flowchart.groups.get(&gid).unwrap();
+    assert_eq!(g_after.name, "Renamed Group");
+    assert_eq!(app.interaction.editing_group_name, None);
+
+    // Deselect everything by clicking empty canvas
+    let ctx2 = egui::Context::default();
+    let empty_pos = egui::pos2(500.0, 500.0);
+
+    // Press frame (should start marquee and clear selection)
+    let mut raw_press = egui::RawInput::default();
+    raw_press.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw_press.events = vec![
+        egui::Event::PointerMoved(empty_pos),
+        egui::Event::PointerButton {
+            pos: empty_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = ctx2.run(raw_press, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            app.draw_canvas(ui);
+        });
+    });
+
+    // Keep dragging the marquee a bit to ensure consistent state
+    let mut raw_drag = egui::RawInput::default();
+    raw_drag.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    let drag_pos = egui::pos2(empty_pos.x + 20.0, empty_pos.y + 15.0);
+    raw_drag.events = vec![
+        egui::Event::PointerMoved(drag_pos),
+        egui::Event::PointerButton {
+            pos: drag_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = ctx2.run(raw_drag, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            app.draw_canvas(ui);
+        });
+    });
+
+    // Release frame
+    let mut raw_release = egui::RawInput::default();
+    raw_release.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw_release.events = vec![
+        egui::Event::PointerMoved(empty_pos),
+        egui::Event::PointerButton {
+            pos: empty_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = ctx2.run(raw_release, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            app.draw_canvas(ui);
+        });
+    });
+
+    assert_eq!(app.interaction.selected_group, None);
+
+    // Reselect the group by hit-testing inside its rect (simulating a click without
+    // engaging marquee). For nodes at (0,0) and (120,0) with padding 16, a safe
+    // inside point is (-60, 45)
+    let inside_group = egui::pos2(-60.0, 45.0);
+    let hit_gid = app.find_group_at_position(inside_group);
+    app.interaction.selected_group = hit_gid;
+
+    // The group should be selected again and the name should persist
+    assert_eq!(app.interaction.selected_group, Some(gid));
+    let g_final = app.flowchart.groups.get(&gid).unwrap();
+    assert_eq!(g_final.name, "Renamed Group");
+}
+
+#[test]
 fn drawing_canvas_with_node_produces_shapes() {
     let mut app = FlowchartApp::default();
     app.node_counter = 1; // skip auto-centering
