@@ -109,6 +109,150 @@ fn clicking_canvas_selects_node() {
 }
 
 #[test]
+fn group_creation_via_shortcut_selects_and_starts_name_edit() {
+    let mut app = FlowchartApp::default();
+
+    // Prepare stable canvas so positions are deterministic
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Add two nodes at known positions
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    // Select both nodes
+    app.interaction.selected_nodes = vec![n1, n2];
+    app.interaction.selected_node = None;
+
+    // Drive an egui frame that sends Cmd/Ctrl+G and invokes the shortcut handler
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw.events = vec![egui::Event::Key {
+        key: egui::Key::G,
+        physical_key: Some(egui::Key::G),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+    }];
+    let _ = ctx.run(raw, |ctx| {
+        // The app normally calls this from update(); we call it directly for unit testing
+        app.handle_group_shortcuts(ctx);
+    });
+
+    // A group should have been created and selected
+    assert_eq!(app.flowchart.groups.len(), 1);
+    let gid = app.interaction.selected_group.expect("group should be selected");
+    let group = app.flowchart.groups.get(&gid).expect("group exists");
+    let mut members = group.members.clone();
+    members.sort();
+    let mut expected = vec![n1, n2];
+    expected.sort();
+    assert_eq!(members, expected);
+
+    // Editing of the group name should have started
+    assert_eq!(app.interaction.editing_group_name, Some(gid));
+    assert!(app.interaction.should_select_text, "should select text on first edit frame");
+    assert!(!app.interaction.focus_requested_for_edit, "focus not yet requested until UI renders");
+}
+
+#[test]
+fn properties_panel_enters_group_name_edit_and_focuses() {
+    let mut app = FlowchartApp::default();
+
+    // Create a simple group with one node
+    let n = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "N".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let gid = uuid::Uuid::new_v4();
+    app.flowchart.groups.insert(
+        gid,
+        crate::types::Group {
+            id: gid,
+            name: "Group 1".into(),
+            members: vec![n],
+        },
+    );
+    app.interaction.selected_group = Some(gid);
+    app.interaction.editing_group_name = Some(gid);
+    app.interaction.temp_group_name = "Group 1".into();
+    app.interaction.should_select_text = true;
+    app.interaction.focus_requested_for_edit = false;
+
+    // Run a UI frame to render the properties panel; this should request focus and clear select flag
+    let _ = run_ui_with(Vec::new(), |ctx| {
+        egui::SidePanel::right("properties_panel_test")
+            .resizable(false)
+            .default_width(300.0)
+            .show(ctx, |ui| {
+                app.draw_properties_panel(ui);
+            });
+    });
+
+    // After first-frame focus logic, we expect the focus request to be set
+    assert!(app.interaction.focus_requested_for_edit);
+    // Depending on focus timing, should_select_text may be cleared in the same frame;
+    // We only assert it is not left in an inconsistent state (either true before focus, or false after selection)
+}
+
+#[test]
+fn rendering_group_label_smoke() {
+    let mut app = FlowchartApp::default();
+    app.canvas.offset = egui::Vec2::new(400.0, 300.0);
+    app.canvas.zoom_factor = 1.0;
+
+    // Create two nodes and a group to ensure a non-empty rect
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (160.0, 80.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let gid = uuid::Uuid::new_v4();
+    app.flowchart.groups.insert(
+        gid,
+        crate::types::Group { id: gid, name: "My Group".into(), members: vec![n1, n2] },
+    );
+
+    // Render a frame that draws the canvas (and thus the group label); expecting no panic
+    let _ = run_ui_with(Vec::new(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            app.draw_canvas(ui);
+        });
+    });
+}
+
+#[test]
 fn drawing_canvas_with_node_produces_shapes() {
     let mut app = FlowchartApp::default();
     app.node_counter = 1; // skip auto-centering

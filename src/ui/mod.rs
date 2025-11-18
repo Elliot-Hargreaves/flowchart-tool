@@ -100,6 +100,9 @@ impl eframe::App for FlowchartApp {
         // Handle file-related keyboard shortcuts (New/Open/Save)
         self.handle_file_shortcuts(ctx, frame);
 
+        // Handle group-related shortcuts (create/add to group)
+        self.handle_group_shortcuts(ctx);
+
         // Intercept native window close requests (titlebar X)
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -254,6 +257,132 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    /// Handle keyboard shortcuts related to groups (Ctrl/Cmd+G to group selected nodes)
+    fn handle_group_shortcuts(&mut self, ctx: &egui::Context) {
+        // Avoid interfering while editing text fields
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        // Detect Cmd/Ctrl+G in a way that works both in app and in headless tests:
+        // 1) Prefer the high-level key/modifier state for normal runtime
+        // 2) Fall back to scanning raw input events for a Key::G press with command/ctrl
+        let pressed = ctx.input(|i| {
+            let high_level = i.key_pressed(egui::Key::G) && (i.modifiers.command || i.modifiers.ctrl);
+            if high_level {
+                return true;
+            }
+            // Fallback: scan raw events (useful in tests where i.modifiers may not be updated)
+            i.events.iter().any(|ev| match ev {
+                egui::Event::Key { key, pressed: true, modifiers, .. } if *key == egui::Key::G => {
+                    modifiers.command || modifiers.ctrl
+                }
+                _ => false,
+            })
+        });
+        if !pressed {
+            return;
+        }
+
+        // Determine nodes to group: use multi-selection if any; otherwise use single selected node
+        let mut nodes_to_group: Vec<NodeId> = if !self.interaction.selected_nodes.is_empty() {
+            self.interaction.selected_nodes.clone()
+        } else if let Some(id) = self.interaction.selected_node {
+            vec![id]
+        } else {
+            Vec::new()
+        };
+        nodes_to_group.sort();
+        nodes_to_group.dedup();
+        if nodes_to_group.is_empty() {
+            return;
+        }
+
+        // If a group is currently selected, add the nodes to that group; otherwise create a new group
+        if let Some(gid) = self.interaction.selected_group {
+            if let Some(group) = self.flowchart.groups.get_mut(&gid) {
+                for id in nodes_to_group {
+                    if !group.members.contains(&id) {
+                        group.members.push(id);
+                    }
+                }
+                self.file.has_unsaved_changes = true;
+            }
+        } else {
+            let gid = uuid::Uuid::new_v4();
+            let name = format!("Group {}", self.group_counter + 1);
+            self.group_counter += 1;
+            self.flowchart.groups.insert(
+                gid,
+                crate::types::Group {
+                    id: gid,
+                    name,
+                    members: nodes_to_group,
+                },
+            );
+            // Select the new group
+            self.interaction.selected_group = Some(gid);
+            self.interaction.selected_node = None;
+            self.interaction.selected_nodes.clear();
+            self.interaction.selected_connection = None;
+            // Start editing the group name immediately (focus and select-all handled in UI)
+            if let Some(g) = self.flowchart.groups.get(&gid) {
+                self.interaction.editing_group_name = Some(gid);
+                self.interaction.temp_group_name = g.name.clone();
+                self.interaction.should_select_text = true;
+                self.interaction.focus_requested_for_edit = false;
+            }
+            self.file.has_unsaved_changes = true;
+        }
+    }
+
+    /// Computes the world-space rect of a node (centered at position) with padding 0.
+    fn node_world_rect(&self, node: &FlowchartNode) -> egui::Rect {
+        // Keep in sync with rendering NODE_SIZE
+        const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
+        let center = egui::pos2(node.position.0, node.position.1);
+        egui::Rect::from_center_size(center, NODE_SIZE)
+    }
+
+    /// Computes the world-space bounding rect of a group with padding.
+    fn group_world_rect(&self, group_id: crate::types::GroupId) -> Option<egui::Rect> {
+        let group = self.flowchart.groups.get(&group_id)?;
+        if group.members.is_empty() {
+            return None;
+        }
+        let mut rect_opt: Option<egui::Rect> = None;
+        for nid in &group.members {
+            if let Some(node) = self.flowchart.nodes.get(nid) {
+                let nr = self.node_world_rect(node);
+                rect_opt = Some(if let Some(r) = rect_opt { r.union(nr) } else { nr });
+            }
+        }
+        rect_opt.map(|r| {
+            let pad = 16.0;
+            r.expand2(egui::vec2(pad, pad))
+        })
+    }
+
+    /// Returns a group id if the world position is inside any group's bounding rectangle.
+    fn find_group_at_position(&self, world_pos: egui::Pos2) -> Option<crate::types::GroupId> {
+        // If multiple hit, prefer the smallest area (innermost group)
+        let mut best: Option<(crate::types::GroupId, f32)> = None;
+        for (gid, _g) in &self.flowchart.groups {
+            if let Some(r) = self.group_world_rect(*gid) {
+                if r.contains(world_pos) {
+                    let area = r.area();
+                    match best {
+                        None => best = Some((*gid, area)),
+                        Some((_, best_area)) => {
+                            if area < best_area {
+                                best = Some((*gid, area));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(gid, _)| gid)
+    }
     #[cfg(target_arch = "wasm32")]
     fn update_beforeunload(has_unsaved_changes: bool) {
         if let Some(window) = web_sys::window() {
@@ -401,16 +530,14 @@ impl FlowchartApp {
 
                 // Perform deletion
                 for id in &self.interaction.selected_nodes {
-                    self.flowchart.nodes.remove(id);
+                    let _ = self.flowchart.remove_node(id);
                 }
-                self.flowchart
-                    .connections
-                    .retain(|c| !selected_set.contains(&c.from) && !selected_set.contains(&c.to));
 
                 // Clear selection
                 self.interaction.selected_nodes.clear();
                 self.interaction.selected_node = None;
                 self.interaction.selected_connection = None;
+                self.interaction.selected_group = None;
                 self.interaction.editing_node_name = None;
                 self.file.has_unsaved_changes = true;
             } else if let Some(selected_node) = self.interaction.selected_node {
@@ -429,17 +556,13 @@ impl FlowchartApp {
                         .push_action(UndoAction::NodeDeleted { node, connections });
                 }
 
-                // Remove the selected node
-                self.flowchart.nodes.remove(&selected_node);
-
-                // Remove all connections involving this node
-                self.flowchart
-                    .connections
-                    .retain(|c| c.from != selected_node && c.to != selected_node);
+                // Remove the selected node (also updates groups and connections)
+                let _ = self.flowchart.remove_node(&selected_node);
 
                 // Clear selection
                 self.interaction.selected_node = None;
                 self.interaction.selected_nodes.clear();
+                self.interaction.selected_group = None;
                 self.interaction.editing_node_name = None;
                 self.file.has_unsaved_changes = true;
             } else if let Some(conn_idx) = self.interaction.selected_connection {
@@ -641,7 +764,78 @@ impl FlowchartApp {
                     ui.heading("Properties");
             ui.separator();
 
-            if let Some(selected_id) = self.interaction.selected_node {
+            if let Some(gid) = self.interaction.selected_group {
+                ui.label("Type: Group");
+                ui.separator();
+
+                if let Some(group) = self.flowchart.groups.get(&gid).cloned() {
+                    ui.label("Name:");
+                    if self.interaction.editing_group_name == Some(gid) {
+                        // Ensure temp is initialized
+                        if self.interaction.temp_group_name.is_empty() {
+                            self.interaction.temp_group_name = group.name.clone();
+                        }
+                        let response = ui.text_edit_singleline(&mut self.interaction.temp_group_name);
+
+                        // Only request focus on the first frame of editing
+                        if !self.interaction.focus_requested_for_edit {
+                            response.request_focus();
+                            self.interaction.focus_requested_for_edit = true;
+                        }
+                        // Select all text when flag is set and field has focus
+                        if self.interaction.should_select_text && response.has_focus() {
+                            self.interaction.should_select_text = false;
+                            self.select_all_text_in_field_with_len(ui, response.id, self.interaction.temp_group_name.len());
+                        }
+
+                        // Handle Enter key to save changes
+                        if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            // Commit change
+                            if let Some(g) = self.flowchart.groups.get_mut(&gid) {
+                                let old_name = g.name.clone();
+                                let new_name = self.interaction.temp_group_name.trim().to_string();
+                                if !new_name.is_empty() && new_name != old_name {
+                                    g.name = new_name;
+                                    // We could add a dedicated undo action in future
+                                    self.file.has_unsaved_changes = true;
+                                }
+                            }
+                            self.interaction.editing_group_name = None;
+                            self.interaction.temp_group_name.clear();
+                        }
+
+                        // Save on focus lost as well
+                        if response.lost_focus() && !ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            if let Some(g) = self.flowchart.groups.get_mut(&gid) {
+                                let old_name = g.name.clone();
+                                let new_name = self.interaction.temp_group_name.trim().to_string();
+                                if !new_name.is_empty() && new_name != old_name {
+                                    g.name = new_name;
+                                    self.file.has_unsaved_changes = true;
+                                }
+                            }
+                            self.interaction.editing_group_name = None;
+                            self.interaction.temp_group_name.clear();
+                        }
+                    } else if ui.button(&group.name).clicked() {
+                        self.interaction.editing_group_name = Some(gid);
+                        self.interaction.temp_group_name = group.name.clone();
+                        self.interaction.should_select_text = true;
+                        self.interaction.focus_requested_for_edit = false;
+                    }
+
+                    ui.separator();
+                    // Show member count and names
+                    ui.label(format!("Members: {}", group.members.len()));
+                    for nid in &group.members {
+                        if let Some(n) = self.flowchart.nodes.get(nid) {
+                            ui.label(format!("• {}", n.name));
+                        }
+                    }
+                } else {
+                    ui.label("Group not found");
+                }
+            } else if let Some(selected_id) = self.interaction.selected_node {
                 if let Some(node) = self.flowchart.nodes.get(&selected_id).cloned() {
                     // If the currently selected node is NOT a Transformer, clear any
                     // Transformer globals staging so edits don't linger across types.
@@ -817,6 +1011,27 @@ impl FlowchartApp {
                 .set_char_range(Some(egui::text::CCursorRange::two(
                     egui::text::CCursor::new(0),
                     egui::text::CCursor::new(text_len),
+                )));
+        });
+    }
+
+    /// Selects all text in a text edit field using a provided length.
+    /// Useful for selecting group-name fields whose content is stored separately.
+    fn select_all_text_in_field_with_len(
+        &self,
+        ui: &mut egui::Ui,
+        field_id: egui::Id,
+        len: usize,
+    ) {
+        ui.memory_mut(|mem| {
+            let state = mem
+                .data
+                .get_temp_mut_or_default::<egui::text_edit::TextEditState>(field_id);
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(len),
                 )));
         });
     }
@@ -1737,6 +1952,7 @@ impl FlowchartApp {
                         // Clear existing selection while selecting a new region
                         self.interaction.selected_nodes.clear();
                         self.interaction.selected_node = None;
+                        self.interaction.selected_group = None;
                         self.interaction.selected_connection = None;
                     }
                 }
@@ -1787,6 +2003,7 @@ impl FlowchartApp {
                     self.interaction.selected_node = Some(node_id);
                     self.interaction.selected_nodes.clear();
                     self.interaction.selected_nodes.push(node_id);
+                    self.interaction.selected_group = None;
                     self.interaction.selected_connection = None;
                     self.interaction.editing_node_name = None;
                     // Clear temp producer values to reload from selected node
@@ -1797,15 +2014,27 @@ impl FlowchartApp {
                         self.interaction.selected_connection = Some(conn_idx);
                         self.interaction.selected_node = None;
                         self.interaction.selected_nodes.clear();
+                        self.interaction.selected_group = None;
                         self.interaction.editing_node_name = None;
                         self.clear_temp_editing_values();
                     } else {
-                        // Clear selection if clicking on empty space
-                        self.interaction.selected_node = None;
-                        self.interaction.selected_nodes.clear();
-                        self.interaction.selected_connection = None;
-                        self.interaction.editing_node_name = None;
-                        self.clear_temp_editing_values();
+                        // Try to select a group when clicking on empty space inside its rect
+                        if let Some(gid) = self.find_group_at_position(world_pos) {
+                            self.interaction.selected_group = Some(gid);
+                            self.interaction.selected_node = None;
+                            self.interaction.selected_nodes.clear();
+                            self.interaction.selected_connection = None;
+                            self.interaction.editing_node_name = None;
+                            self.clear_temp_editing_values();
+                        } else {
+                            // Clear selection if clicking on empty space
+                            self.interaction.selected_group = None;
+                            self.interaction.selected_node = None;
+                            self.interaction.selected_nodes.clear();
+                            self.interaction.selected_connection = None;
+                            self.interaction.editing_node_name = None;
+                            self.clear_temp_editing_values();
+                        }
                     }
                 }
             }
@@ -1848,6 +2077,7 @@ impl FlowchartApp {
                 self.interaction.selected_node = None;
                 self.interaction.selected_nodes.clear();
                 self.interaction.selected_connection = None;
+                self.interaction.selected_group = None;
                 self.clear_temp_editing_values();
             }
         }
@@ -1865,19 +2095,37 @@ impl FlowchartApp {
                 self.interaction.selected_node = None;
                 self.interaction.selected_nodes.clear();
                 self.interaction.selected_connection = None;
+                self.interaction.selected_group = None;
                 self.clear_temp_editing_values();
             }
         }
     }
 
     /// Apply the currently selected auto-arrangement mode to nodes.
-    /// If any nodes are selected, only those nodes are rearranged.
+    /// If a group is selected, only that group's nodes are rearranged.
+    /// Otherwise, if any nodes are selected, only those nodes are rearranged.
     fn apply_auto_arrangement(&mut self) {
         match self.auto_arrange_mode {
             crate::ui::state::AutoArrangeMode::ForceDirected => self.auto_layout_graph(),
             crate::ui::state::AutoArrangeMode::Grid => self.grid_layout_selected_or_all(),
             crate::ui::state::AutoArrangeMode::Line => self.line_layout_selected_or_all(),
         }
+    }
+
+    /// Determine which node ids should be targeted by layout operations.
+    /// Priority: selected group > multi-selection > all nodes.
+    fn target_ids_for_layout(&self) -> Vec<NodeId> {
+        if let Some(gid) = self.interaction.selected_group {
+            if let Some(g) = self.flowchart.groups.get(&gid) {
+                let mut v = g.members.clone();
+                v.retain(|id| self.flowchart.nodes.contains_key(id));
+                return v;
+            }
+        }
+        if self.interaction.selected_nodes.len() > 1 {
+            return self.interaction.selected_nodes.clone();
+        }
+        self.flowchart.nodes.keys().copied().collect()
     }
 
     /// Compute an adjacency-aware ordering of the given nodes so that connected
@@ -2047,12 +2295,8 @@ impl FlowchartApp {
             return;
         }
 
-        // Determine target nodes: use selected only if multiple are selected; otherwise use all
-        let target_ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
-            self.interaction.selected_nodes.clone()
-        } else {
-            self.flowchart.nodes.keys().copied().collect()
-        };
+        // Determine target nodes: selected group > multi-selection > all
+        let target_ids: Vec<NodeId> = self.target_ids_for_layout();
         if target_ids.is_empty() {
             return;
         }
@@ -2227,11 +2471,7 @@ impl FlowchartApp {
         if self.flowchart.nodes.is_empty() {
             return;
         }
-        let base_ids: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
-            self.interaction.selected_nodes.clone()
-        } else {
-            self.flowchart.nodes.keys().copied().collect()
-        };
+        let base_ids: Vec<NodeId> = self.target_ids_for_layout();
         let ids = self.adjacency_aware_order(&base_ids);
         if ids.is_empty() {
             return;
@@ -2332,11 +2572,7 @@ impl FlowchartApp {
         if self.flowchart.nodes.is_empty() {
             return;
         }
-        let ids_base: Vec<NodeId> = if self.interaction.selected_nodes.len() > 1 {
-            self.interaction.selected_nodes.clone()
-        } else {
-            self.flowchart.nodes.keys().copied().collect()
-        };
+        let ids_base: Vec<NodeId> = self.target_ids_for_layout();
         let ids = self.adjacency_aware_order(&ids_base);
         if ids.is_empty() {
             return;

@@ -13,6 +13,9 @@ pub type NodeId = Uuid;
 /// Unique identifier for messages flowing through the system.
 pub type MessageId = Uuid;
 
+/// Unique identifier for groups.
+pub type GroupId = Uuid;
+
 /// Represents the current state of a flowchart node during simulation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeState {
@@ -71,6 +74,18 @@ pub enum NodeType {
         #[serde(default)]
         initial_globals: serde_json::Map<String, serde_json::Value>,
     },
+}
+
+/// A named group of nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    /// Unique identifier for this group
+    pub id: GroupId,
+    /// Display name of the group
+    pub name: String,
+    /// Member node ids
+    #[serde(default)]
+    pub members: Vec<NodeId>,
 }
 
 /// Represents a single node in the flowchart.
@@ -176,6 +191,9 @@ pub struct Flowchart {
     pub nodes: HashMap<NodeId, FlowchartNode>,
     /// List of all connections between nodes
     pub connections: Vec<Connection>,
+    /// Map of groups by id
+    #[serde(default)]
+    pub groups: HashMap<GroupId, Group>,
     /// Current state of the simulation
     pub simulation_state: SimulationState,
     /// Current simulation step counter
@@ -188,6 +206,7 @@ impl Default for Flowchart {
         Self {
             nodes: HashMap::new(),
             connections: Vec::new(),
+            groups: HashMap::new(),
             simulation_state: SimulationState::Stopped,
             current_step: 0,
         }
@@ -262,6 +281,18 @@ impl Flowchart {
             // Remove all connections involving this node
             self.connections
                 .retain(|conn| conn.from != *node_id && conn.to != *node_id);
+
+            // Remove node from any groups
+            let mut empty_groups: Vec<GroupId> = Vec::new();
+            for (gid, grp) in self.groups.iter_mut() {
+                grp.members.retain(|n| n != node_id);
+                if grp.members.is_empty() {
+                    empty_groups.push(*gid);
+                }
+            }
+            for gid in empty_groups {
+                self.groups.remove(&gid);
+            }
         }
         removed
     }

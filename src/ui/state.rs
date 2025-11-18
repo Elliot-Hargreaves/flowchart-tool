@@ -59,12 +59,21 @@ pub struct InteractionState {
     /// Currently selected multiple nodes (if empty, no node selected)
     #[serde(skip)]
     pub selected_nodes: Vec<NodeId>,
+    /// Currently selected group, if any
+    #[serde(skip)]
+    pub selected_group: Option<GroupId>,
     /// Node currently being edited for name changes
     #[serde(skip)]
     pub editing_node_name: Option<NodeId>,
+    /// Group currently being edited for name changes
+    #[serde(skip)]
+    pub editing_group_name: Option<GroupId>,
     /// Temporary storage for node name while editing
     #[serde(skip)]
     pub temp_node_name: String,
+    /// Temporary storage for group name while editing
+    #[serde(skip)]
+    pub temp_group_name: String,
     /// Flag indicating text should be selected in the name field
     #[serde(skip)]
     pub should_select_text: bool,
@@ -136,8 +145,11 @@ impl Default for InteractionState {
         Self {
             selected_node: None,
             selected_nodes: Vec::new(),
+            selected_group: None,
             editing_node_name: None,
+            editing_group_name: None,
             temp_node_name: String::new(),
+            temp_group_name: String::new(),
             should_select_text: false,
             focus_requested_for_edit: false,
             dragging_node: None,
@@ -334,6 +346,8 @@ pub struct FlowchartApp {
     pub applied_viewport_restore: bool,
     /// Selected auto-arrangement mode for the toolbar button
     pub auto_arrange_mode: AutoArrangeMode,
+    /// Counter for generating default group names
+    pub group_counter: u32,
 }
 
 impl Default for FlowchartApp {
@@ -357,6 +371,7 @@ impl Default for FlowchartApp {
             last_window_pos: None,
             applied_viewport_restore: false,
             auto_arrange_mode: AutoArrangeMode::ForceDirected,
+            group_counter: 0,
         }
     }
 }
