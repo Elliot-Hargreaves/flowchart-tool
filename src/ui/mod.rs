@@ -2103,6 +2103,7 @@ impl FlowchartApp {
             && !self.interaction.is_panning
             && self.interaction.dragging_node.is_none()
             && self.interaction.drawing_connection_from.is_none()
+            && self.interaction.pending_shift_connection_from.is_none()
         {
             if let Some(pos) = response.interact_pointer_pos() {
                 // If a marquee is already active, always update its end point regardless of what's under the cursor
@@ -2116,11 +2117,15 @@ impl FlowchartApp {
                     if !over_node && !over_conn {
                         self.interaction.marquee_start = Some(pos);
                         self.interaction.marquee_end = Some(pos);
-                        // Clear existing selection while selecting a new region
-                        self.interaction.selected_nodes.clear();
-                        self.interaction.selected_node = None;
-                        self.interaction.selected_group = None;
-                        self.interaction.selected_connection = None;
+                        // Determine if this marquee should be additive (Shift-held at start)
+                        self.interaction.marquee_additive = ui.input(|i| i.modifiers.shift);
+                        // Clear existing selection while selecting a new region unless in additive mode
+                        if !self.interaction.marquee_additive {
+                            self.interaction.selected_nodes.clear();
+                            self.interaction.selected_node = None;
+                            self.interaction.selected_group = None;
+                            self.interaction.selected_connection = None;
+                        }
                     }
                 }
             }
@@ -2136,11 +2141,15 @@ impl FlowchartApp {
                 let max_world = self.screen_to_world(rect_screen.max);
                 let world_rect = egui::Rect::from_min_max(min_world, max_world);
 
-                self.interaction.selected_nodes.clear();
+                if !self.interaction.marquee_additive {
+                    self.interaction.selected_nodes.clear();
+                }
                 for (id, node) in &self.flowchart.nodes {
                     let center = egui::pos2(node.position.0, node.position.1);
                     if world_rect.contains(center) {
-                        self.interaction.selected_nodes.push(*id);
+                        if !self.interaction.selected_nodes.contains(id) {
+                            self.interaction.selected_nodes.push(*id);
+                        }
                     }
                 }
                 // Sync single selection convenience field
@@ -2153,6 +2162,7 @@ impl FlowchartApp {
                 // Clear marquee visuals
                 self.interaction.marquee_start = None;
                 self.interaction.marquee_end = None;
+                self.interaction.marquee_additive = false;
                 self.clear_temp_editing_values();
             }
         }
@@ -2162,14 +2172,34 @@ impl FlowchartApp {
             && !self.interaction.is_panning
             && self.interaction.dragging_node.is_none()
         {
+            // If a pending shift-click on a node is being handled by node-dragging logic (for connection or additive select),
+            // skip default click handling here to avoid double-processing.
+            if self.interaction.pending_shift_connection_from.is_some() {
+                return;
+            }
             if let Some(pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(pos);
 
                 // First try to select a node
                 if let Some(node_id) = self.find_node_at_position(world_pos) {
-                    self.interaction.selected_node = Some(node_id);
-                    self.interaction.selected_nodes.clear();
-                    self.interaction.selected_nodes.push(node_id);
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    if shift {
+                        // Additive selection: add node without clearing others
+                        if !self.interaction.selected_nodes.contains(&node_id) {
+                            self.interaction.selected_nodes.push(node_id);
+                        }
+                        // Convenience single-selection sync
+                        if self.interaction.selected_nodes.len() == 1 {
+                            self.interaction.selected_node = Some(node_id);
+                        } else {
+                            self.interaction.selected_node = None;
+                        }
+                    } else {
+                        // Normal single selection
+                        self.interaction.selected_node = Some(node_id);
+                        self.interaction.selected_nodes.clear();
+                        self.interaction.selected_nodes.push(node_id);
+                    }
                     self.interaction.selected_group = None;
                     self.interaction.selected_connection = None;
                     self.interaction.editing_node_name = None;

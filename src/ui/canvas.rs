@@ -154,13 +154,17 @@ impl FlowchartApp {
                 // Check if we're starting a new interaction
                 if self.interaction.dragging_node.is_none()
                     && self.interaction.drawing_connection_from.is_none()
+                    && self.interaction.pending_shift_connection_from.is_none()
                 {
                     // Check if clicking on a node
                     if let Some(node_id) = self.find_node_at_position(world_pos) {
                         if shift_held {
-                            // Shift-click on node: start drawing connection
-                            self.interaction.drawing_connection_from = Some(node_id);
-                            self.interaction.connection_draw_pos = Some(current_pos);
+                            // Shift-press on node: defer connection start until drag threshold is exceeded.
+                            // If no drag happens and mouse is released, treat as additive selection.
+                            if self.interaction.pending_shift_connection_from.is_none() {
+                                self.interaction.pending_shift_connection_from = Some(node_id);
+                                self.interaction.pending_shift_start_screen_pos = Some(current_pos);
+                            }
                         } else {
                             // Normal click on node: start dragging
                             self.start_node_drag(node_id, current_pos, world_pos);
@@ -173,6 +177,22 @@ impl FlowchartApp {
                 } else if self.interaction.drawing_connection_from.is_some() {
                     // Continue drawing connection - update preview position
                     self.interaction.connection_draw_pos = Some(current_pos);
+                } else if let (Some(from_id), Some(start_pos)) = (
+                    self.interaction.pending_shift_connection_from,
+                    self.interaction.pending_shift_start_screen_pos,
+                ) {
+                    // Evaluate whether we've dragged far enough to start a connection preview
+                    let start_world = self.screen_to_world(start_pos);
+                    let cur_world = self.screen_to_world(current_pos);
+                    let dist_world = (cur_world - start_world).length();
+                    if dist_world >= crate::constants::CLICK_THRESHOLD {
+                        // Begin connection drawing from the originally pressed node
+                        self.interaction.drawing_connection_from = Some(from_id);
+                        self.interaction.connection_draw_pos = Some(current_pos);
+                        // Clear pending state now that we've committed to connection drawing
+                        self.interaction.pending_shift_connection_from = None;
+                        self.interaction.pending_shift_start_screen_pos = None;
+                    }
                 }
             }
         } else {
@@ -183,6 +203,27 @@ impl FlowchartApp {
                     self.finalize_connection(world_pos);
                 }
             }
+
+            // If there was a pending shift-click on a node and we never started drawing a connection,
+            // interpret this as an additive selection of that node.
+            if let Some(node_id) = self.interaction.pending_shift_connection_from.take() {
+                // Add to selection if not already present
+                if !self.interaction.selected_nodes.contains(&node_id) {
+                    self.interaction.selected_nodes.push(node_id);
+                }
+                // Clear other selection kinds and sync single-selection helper
+                if self.interaction.selected_nodes.len() == 1 {
+                    self.interaction.selected_node = Some(node_id);
+                } else {
+                    self.interaction.selected_node = None;
+                }
+                self.interaction.selected_group = None;
+                self.interaction.selected_connection = None;
+                self.interaction.editing_node_name = None;
+                self.clear_temp_editing_values();
+            }
+            // Always clear pending start position on release
+            self.interaction.pending_shift_start_screen_pos = None;
 
             // Record undo for node movement when drag ends
             if let Some(dragging_id) = self.interaction.dragging_node {

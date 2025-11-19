@@ -106,12 +106,21 @@ pub struct InteractionState {
     pub marquee_start: Option<egui::Pos2>,
     #[serde(skip)]
     pub marquee_end: Option<egui::Pos2>,
+    /// Whether the current marquee operation should add to the existing selection (Shift-held)
+    #[serde(skip)]
+    pub marquee_additive: bool,
     /// Node from which a connection is being drawn (shift-click drag)
     #[serde(skip)]
     pub drawing_connection_from: Option<NodeId>,
     /// Current mouse position while drawing connection
     #[serde(skip)]
     pub connection_draw_pos: Option<egui::Pos2>,
+    /// Pending shift-press on a node that may become a connection if dragged beyond threshold
+    #[serde(skip)]
+    pub pending_shift_connection_from: Option<NodeId>,
+    /// Start screen position for pending shift-connection gesture
+    #[serde(skip)]
+    pub pending_shift_start_screen_pos: Option<egui::Pos2>,
     /// Currently selected connection index, if any
     #[serde(skip)]
     pub selected_connection: Option<usize>,
@@ -161,8 +170,11 @@ impl Default for InteractionState {
             last_pan_pos: None,
             marquee_start: None,
             marquee_end: None,
+            marquee_additive: false,
             drawing_connection_from: None,
             connection_draw_pos: None,
+            pending_shift_connection_from: None,
+            pending_shift_start_screen_pos: None,
             selected_connection: None,
             temp_producer_start_step: String::new(),
             temp_producer_messages_per_cycle: String::new(),
