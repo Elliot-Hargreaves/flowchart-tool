@@ -25,62 +25,105 @@ impl FlowchartApp {
             self.draw_grid(painter, canvas_rect);
         }
 
-        // Draw group background rectangles behind connections and nodes
-        // so they appear as faint background grouping hints, and render the group name
+        // Draw group background shapes behind connections and nodes and render the group name
         for (gid, group) in &self.flowchart.groups {
-            if let Some(world_rect) = self.group_world_rect(*gid) {
-                // Convert to screen rect with current zoom/pan
-                let min = self.world_to_screen(world_rect.min);
-                let max = self.world_to_screen(world_rect.max);
-                let screen_rect = egui::Rect::from_min_max(min, max);
+            let is_selected = self.interaction.selected_group == Some(*gid);
+            let fill = if is_selected {
+                egui::Color32::from_rgba_unmultiplied(100, 150, 255, 32)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(128, 128, 128, 20)
+            };
+            let stroke_color = if is_selected {
+                egui::Color32::from_rgb(100, 150, 255)
+            } else {
+                egui::Color32::from_rgba_unmultiplied(128, 128, 128, 128)
+            };
 
-                let is_selected = self.interaction.selected_group == Some(*gid);
-                let fill = if is_selected {
-                    egui::Color32::from_rgba_unmultiplied(100, 150, 255, 32)
-                } else {
-                    egui::Color32::from_rgba_unmultiplied(128, 128, 128, 20)
-                };
-                let stroke_color = if is_selected {
-                    egui::Color32::from_rgb(100, 150, 255)
-                } else {
-                    egui::Color32::from_rgba_unmultiplied(128, 128, 128, 128)
-                };
-                painter.rect_filled(
-                    screen_rect,
-                    crate::constants::GROUP_CORNER_RADIUS,
-                    fill,
-                );
-                painter.rect_stroke(
-                    screen_rect,
-                    crate::constants::GROUP_CORNER_RADIUS,
-                    egui::Stroke::new(crate::constants::GROUP_STROKE_WIDTH, stroke_color),
-                    StrokeKind::Inside,
-                );
+            match group.drawing {
+                crate::types::GroupDrawingMode::Rectangle => {
+                    if let Some(world_rect) = self.group_world_rect(*gid) {
+                        let min = self.world_to_screen(world_rect.min);
+                        let max = self.world_to_screen(world_rect.max);
+                        let screen_rect = egui::Rect::from_min_max(min, max);
+                        painter.rect_filled(
+                            screen_rect,
+                            crate::constants::GROUP_CORNER_RADIUS,
+                            fill,
+                        );
+                        painter.rect_stroke(
+                            screen_rect,
+                            crate::constants::GROUP_CORNER_RADIUS,
+                            egui::Stroke::new(
+                                crate::constants::GROUP_STROKE_WIDTH,
+                                stroke_color,
+                            ),
+                            StrokeKind::Inside,
+                        );
 
-                // Draw the group name in the bottom-left corner of the rectangle
-                // Scale font size with zoom for readability
-                let mut text = group.name.as_str();
-                if text.is_empty() {
-                    text = "Unnamed Group";
+                        // Label in bottom-left of rect
+                        let mut text = group.name.as_str();
+                        if text.is_empty() {
+                            text = "Unnamed Group";
+                        }
+                        let padding = crate::constants::GROUP_LABEL_PADDING_BASE
+                            * self.canvas.zoom_factor.max(0.5);
+                        let pos = egui::pos2(
+                            screen_rect.min.x + padding,
+                            screen_rect.max.y - padding,
+                        );
+                        let text_color = if self.dark_mode {
+                            egui::Color32::from_gray(220)
+                        } else {
+                            egui::Color32::from_gray(40)
+                        };
+                        let font_size = (12.0 * self.canvas.zoom_factor).clamp(8.0, 24.0);
+                        let font = egui::FontId::proportional(font_size);
+                        painter.text(pos, egui::Align2::LEFT_BOTTOM, text, font, text_color);
+                    }
                 }
-                let padding = crate::constants::GROUP_LABEL_PADDING_BASE
-                    * self.canvas.zoom_factor.max(0.5);
-                let pos = egui::pos2(screen_rect.min.x + padding, screen_rect.max.y - padding);
-                // Choose a subtle but readable color; use stroke_color for contrast
-                let text_color = if self.dark_mode {
-                    egui::Color32::from_gray(220)
-                } else {
-                    egui::Color32::from_gray(40)
-                };
-                let font_size = (12.0 * self.canvas.zoom_factor).clamp(8.0, 24.0);
-                let font = egui::FontId::proportional(font_size);
-                painter.text(
-                    pos,
-                    egui::Align2::LEFT_BOTTOM,
-                    text,
-                    font,
-                    text_color,
-                );
+                crate::types::GroupDrawingMode::Polygon => {
+                    if let Some(world_poly) = self.group_world_polygon(*gid) {
+                        // Transform to screen
+                        let mut screen_points: Vec<egui::Pos2> = Vec::with_capacity(world_poly.len());
+                        for p in &world_poly {
+                            screen_points.push(self.world_to_screen(*p));
+                        }
+                        // Fill and stroke polygon
+                        painter.add(eframe::epaint::Shape::convex_polygon(
+                            screen_points.clone(),
+                            fill,
+                            egui::Stroke::new(
+                                crate::constants::GROUP_STROKE_WIDTH,
+                                stroke_color,
+                            ),
+                        ));
+
+                        // Label using polygon bbox
+                        let bbox_world = egui::Rect::from_points(&world_poly);
+                        let min = self.world_to_screen(bbox_world.min);
+                        let max = self.world_to_screen(bbox_world.max);
+                        let screen_rect = egui::Rect::from_min_max(min, max);
+
+                        let mut text = group.name.as_str();
+                        if text.is_empty() {
+                            text = "Unnamed Group";
+                        }
+                        let padding = crate::constants::GROUP_LABEL_PADDING_BASE
+                            * self.canvas.zoom_factor.max(0.5);
+                        let pos = egui::pos2(
+                            screen_rect.min.x + padding,
+                            screen_rect.max.y - padding,
+                        );
+                        let text_color = if self.dark_mode {
+                            egui::Color32::from_gray(220)
+                        } else {
+                            egui::Color32::from_gray(40)
+                        };
+                        let font_size = (12.0 * self.canvas.zoom_factor).clamp(8.0, 24.0);
+                        let font = egui::FontId::proportional(font_size);
+                        painter.text(pos, egui::Align2::LEFT_BOTTOM, text, font, text_color);
+                    }
+                }
             }
         }
 

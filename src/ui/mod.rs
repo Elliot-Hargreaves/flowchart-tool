@@ -317,6 +317,7 @@ impl FlowchartApp {
                     id: gid,
                     name,
                     members: nodes_to_group,
+                    drawing: crate::types::GroupDrawingMode::Rectangle,
                 },
             );
             // Record undo action for group creation
@@ -347,38 +348,141 @@ impl FlowchartApp {
         egui::Rect::from_center_size(center, node_size)
     }
 
-    /// Computes the world-space bounding rect of a group with padding.
+    /// Computes the world-space bounding rect of a group with padding, depending on drawing mode.
     fn group_world_rect(&self, group_id: crate::types::GroupId) -> Option<egui::Rect> {
+        let group = self.flowchart.groups.get(&group_id)?;
+        match group.drawing {
+            crate::types::GroupDrawingMode::Rectangle => {
+                if group.members.is_empty() {
+                    return None;
+                }
+                let mut rect_opt: Option<egui::Rect> = None;
+                for nid in &group.members {
+                    if let Some(node) = self.flowchart.nodes.get(nid) {
+                        let nr = self.node_world_rect(node);
+                        rect_opt = Some(if let Some(r) = rect_opt { r.union(nr) } else { nr });
+                    }
+                }
+                rect_opt.map(|r| {
+                    let pad = crate::constants::GROUP_PADDING;
+                    r.expand2(egui::vec2(pad, pad))
+                })
+            }
+            crate::types::GroupDrawingMode::Polygon => {
+                // Use the hull's bounding box
+                self.group_world_polygon(group_id)
+                    .map(|pts| egui::Rect::from_points(&pts))
+            }
+        }
+    }
+
+    /// Compute shrink-wrapped polygon (convex hull) around the group's member node rects expanded by padding.
+    fn group_world_polygon(&self, group_id: crate::types::GroupId) -> Option<Vec<egui::Pos2>> {
         let group = self.flowchart.groups.get(&group_id)?;
         if group.members.is_empty() {
             return None;
         }
-        let mut rect_opt: Option<egui::Rect> = None;
+        let pad = crate::constants::GROUP_PADDING;
+        let mut points: Vec<egui::Pos2> = Vec::new();
         for nid in &group.members {
             if let Some(node) = self.flowchart.nodes.get(nid) {
-                let nr = self.node_world_rect(node);
-                rect_opt = Some(if let Some(r) = rect_opt { r.union(nr) } else { nr });
+                let mut r = self.node_world_rect(node);
+                r = r.expand2(egui::vec2(pad, pad));
+                points.push(r.min);
+                points.push(egui::pos2(r.max.x, r.min.y));
+                points.push(r.max);
+                points.push(egui::pos2(r.min.x, r.max.y));
             }
         }
-        rect_opt.map(|r| {
-            let pad = crate::constants::GROUP_PADDING;
-            r.expand2(egui::vec2(pad, pad))
-        })
+        if points.len() <= 1 {
+            return None;
+        }
+        // Convex hull via monotone chain
+        points.sort_by(|a, b| {
+            a.x
+                .partial_cmp(&b.x)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        fn cross(o: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+        let mut lower: Vec<egui::Pos2> = Vec::new();
+        for p in &points {
+            while lower.len() >= 2
+                && cross(lower[lower.len() - 2], lower[lower.len() - 1], *p) <= 0.0
+            {
+                lower.pop();
+            }
+            lower.push(*p);
+        }
+        let mut upper: Vec<egui::Pos2> = Vec::new();
+        for p in points.iter().rev() {
+            while upper.len() >= 2
+                && cross(upper[upper.len() - 2], upper[upper.len() - 1], *p) <= 0.0
+            {
+                upper.pop();
+            }
+            upper.push(*p);
+        }
+        lower.pop();
+        upper.pop();
+        let mut hull = lower;
+        hull.extend(upper);
+        if hull.len() < 3 {
+            None
+        } else {
+            Some(hull)
+        }
     }
 
-    /// Returns a group id if the world position is inside any group's bounding rectangle.
+    /// Returns a group id if the world position is inside any group's background shape.
     fn find_group_at_position(&self, world_pos: egui::Pos2) -> Option<crate::types::GroupId> {
         // If multiple hit, prefer the smallest area (innermost group)
         let mut best: Option<(crate::types::GroupId, f32)> = None;
-        for (gid, _g) in &self.flowchart.groups {
-            if let Some(r) = self.group_world_rect(*gid) {
-                if r.contains(world_pos) {
-                    let area = r.area();
-                    match best {
-                        None => best = Some((*gid, area)),
-                        Some((_, best_area)) => {
-                            if area < best_area {
-                                best = Some((*gid, area));
+        for (gid, g) in &self.flowchart.groups {
+            match g.drawing {
+                crate::types::GroupDrawingMode::Rectangle => {
+                    if let Some(r) = self.group_world_rect(*gid) {
+                        if r.contains(world_pos) {
+                            let area = r.area();
+                            match best {
+                                None => best = Some((*gid, area)),
+                                Some((_, best_area)) => {
+                                    if area < best_area {
+                                        best = Some((*gid, area));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::types::GroupDrawingMode::Polygon => {
+                    if let Some(poly) = self.group_world_polygon(*gid) {
+                        // Quick bbox reject
+                        let bbox = egui::Rect::from_points(&poly);
+                        if bbox.contains(world_pos) {
+                            // Point-in-polygon (winding not needed for convex); use cross sign check
+                            let mut inside = true;
+                            for i in 0..poly.len() {
+                                let a = poly[i];
+                                let b = poly[(i + 1) % poly.len()];
+                                if (b.x - a.x) * (world_pos.y - a.y) - (b.y - a.y) * (world_pos.x - a.x) < 0.0
+                                {
+                                    inside = false;
+                                    break;
+                                }
+                            }
+                            if inside {
+                                let area = bbox.area();
+                                match best {
+                                    None => best = Some((*gid, area)),
+                                    Some((_, best_area)) => {
+                                        if area < best_area {
+                                            best = Some((*gid, area));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -854,6 +958,33 @@ impl FlowchartApp {
                         self.interaction.focus_requested_for_edit = false;
                     }
 
+                    ui.separator();
+                    // Drawing mode selector
+                    ui.label("Drawing mode:");
+                    let mut drawing = group.drawing;
+                    egui::ComboBox::from_id_source("group_drawing_mode")
+                        .selected_text(match drawing {
+                            crate::types::GroupDrawingMode::Rectangle => "Rectangle",
+                            crate::types::GroupDrawingMode::Polygon => "Polygon",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut drawing,
+                                crate::types::GroupDrawingMode::Rectangle,
+                                "Rectangle",
+                            );
+                            ui.selectable_value(
+                                &mut drawing,
+                                crate::types::GroupDrawingMode::Polygon,
+                                "Polygon",
+                            );
+                        });
+                    if drawing != group.drawing {
+                        if let Some(g) = self.flowchart.groups.get_mut(&gid) {
+                            g.drawing = drawing;
+                            self.file.has_unsaved_changes = true;
+                        }
+                    }
                     ui.separator();
                     // Show member count and names
                     ui.label(format!("Members: {}", group.members.len()));

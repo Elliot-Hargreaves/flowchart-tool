@@ -86,6 +86,24 @@ pub struct Group {
     /// Member node ids
     #[serde(default)]
     pub members: Vec<NodeId>,
+    /// How this group should be visualized on the canvas
+    #[serde(default)]
+    pub drawing: GroupDrawingMode,
+}
+
+/// Drawing mode for a group background shape.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GroupDrawingMode {
+    /// Draw an axis-aligned rounded rectangle around the members' bounding box.
+    Rectangle,
+    /// Draw a shrink-wrapped polygon (convex hull) around members with padding.
+    Polygon,
+}
+
+impl Default for GroupDrawingMode {
+    fn default() -> Self {
+        GroupDrawingMode::Rectangle
+    }
 }
 
 /// Represents a single node in the flowchart.
