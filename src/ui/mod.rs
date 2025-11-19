@@ -1094,7 +1094,7 @@ impl FlowchartApp {
             connection.messages.len()
         ));
 
-        // Show message contents
+        // Show message contents (fully expanded with JSON syntax highlighting)
         if !connection.messages.is_empty() {
             ui.separator();
             ui.label("Message Contents:");
@@ -1104,21 +1104,30 @@ impl FlowchartApp {
                 .show(ui, |ui| {
                     for (idx, message) in connection.messages.iter().enumerate() {
                         ui.push_id(idx, |ui| {
-                            egui::CollapsingHeader::new(format!("Message {}", idx + 1))
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    // Display message as formatted JSON
-                                    let json_str = serde_json::to_string_pretty(&message.data)
-                                        .unwrap_or_else(|_| format!("{:?}", message.data));
+                            // Pretty-print JSON for display
+                            let json_str = serde_json::to_string_pretty(&message.data)
+                                .unwrap_or_else(|_| format!("{:?}", message.data));
 
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut json_str.as_str())
-                                            .desired_rows(5)
-                                            .desired_width(f32::INFINITY)
-                                            .code_editor()
-                                            .interactive(false),
-                                    );
-                                });
+                            // Header label for the message
+                            ui.label(format!("Message {}", idx + 1));
+
+                            // Create a JSON layouter for syntax highlighting
+                            let layouter_ref = json_str.clone();
+                            let mut layouter = rendering::create_json_layouter(&layouter_ref);
+
+                            // Non-interactive code viewer with highlighting
+                            ui.add(
+                                egui::TextEdit::multiline(&mut json_str.as_str())
+                                    .desired_rows(5)
+                                    .desired_width(f32::INFINITY)
+                                    .font(egui::TextStyle::Monospace)
+                                    .interactive(false)
+                                    .layouter(&mut layouter),
+                            );
+
+                            // Small separator between messages
+                            ui.add_space(6.0);
+                            ui.separator();
                         });
                     }
                 });
