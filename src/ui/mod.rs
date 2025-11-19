@@ -373,6 +373,11 @@ impl FlowchartApp {
                 self.group_world_polygon(group_id)
                     .map(|pts| egui::Rect::from_points(&pts))
             }
+            crate::types::GroupDrawingMode::TightPolygon => {
+                self.group_world_polygon_tight(group_id)
+                    .or_else(|| self.group_world_polygon(group_id))
+                    .map(|pts| egui::Rect::from_points(&pts))
+            }
         }
     }
 
@@ -382,6 +387,7 @@ impl FlowchartApp {
         if group.members.is_empty() {
             return None;
         }
+        // Regular polygon mode uses full padding and only rectangle corners (convex hull)
         let pad = crate::constants::GROUP_PADDING;
         let mut points: Vec<egui::Pos2> = Vec::new();
         for nid in &group.members {
@@ -436,6 +442,145 @@ impl FlowchartApp {
         }
     }
 
+    /// Compute a tighter shrink-wrapped polygon (concave hull) around the expanded node rect corners.
+    /// Uses a k-nearest concave hull heuristic; falls back to convex hull on failure.
+    fn group_world_polygon_tight(&self, group_id: crate::types::GroupId) -> Option<Vec<egui::Pos2>> {
+        let group = self.flowchart.groups.get(&group_id)?;
+        if group.members.is_empty() {
+            return None;
+        }
+        // Reduced padding and richer point set for a tighter wrap
+        let pad = crate::constants::GROUP_PADDING * crate::constants::TIGHT_PADDING_FACTOR;
+        let mut points: Vec<egui::Pos2> = Vec::new();
+        for nid in &group.members {
+            if let Some(node) = self.flowchart.nodes.get(nid) {
+                let mut r = self.node_world_rect(node);
+                r = r.expand2(egui::vec2(pad, pad));
+                // four corners + edge midpoints to allow concavities
+                let tl = r.min;
+                let tr = egui::pos2(r.max.x, r.min.y);
+                let br = r.max;
+                let bl = egui::pos2(r.min.x, r.max.y);
+                points.push(tl);
+                points.push(tr);
+                points.push(br);
+                points.push(bl);
+                let top_mid = egui::pos2((tl.x + tr.x) * 0.5, tl.y);
+                let right_mid = egui::pos2(tr.x, (tr.y + br.y) * 0.5);
+                let bottom_mid = egui::pos2((bl.x + br.x) * 0.5, bl.y);
+                let left_mid = egui::pos2(tl.x, (tl.y + bl.y) * 0.5);
+                points.push(top_mid);
+                points.push(right_mid);
+                points.push(bottom_mid);
+                points.push(left_mid);
+            }
+        }
+        // Remove duplicates
+        points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)));
+        points.dedup_by(|a, b| (a.x == b.x) && (a.y == b.y));
+        if points.len() < 3 {
+            return None;
+        }
+
+        // Helper closures
+        fn dist2(a: egui::Pos2, b: egui::Pos2) -> f32 { (a.x - b.x).powi(2) + (a.y - b.y).powi(2) }
+        fn angle_between(dir: egui::Vec2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+            let v = egui::vec2(b.x - a.x, b.y - a.y);
+            let ang1 = dir.angle();
+            let ang2 = v.angle();
+            let mut d = ang2 - ang1;
+            while d <= 0.0 { d += std::f32::consts::TAU; }
+            while d > std::f32::consts::TAU { d -= std::f32::consts::TAU; }
+            d
+        }
+        fn segments_intersect(a1: egui::Pos2, a2: egui::Pos2, b1: egui::Pos2, b2: egui::Pos2) -> bool {
+            fn orient(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
+                (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+            }
+            fn on_seg(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> bool {
+                (c.x - a.x).min(b.x - a.x) <= 0.0 && (c.x - a.x).max(b.x - a.x) >= 0.0 &&
+                (c.y - a.y).min(b.y - a.y) <= 0.0 && (c.y - a.y).max(b.y - a.y) >= 0.0
+            }
+            let o1 = orient(a1, a2, b1);
+            let o2 = orient(a1, a2, b2);
+            let o3 = orient(b1, b2, a1);
+            let o4 = orient(b1, b2, a2);
+            if o1 == 0.0 && on_seg(a1, a2, b1) { return true; }
+            if o2 == 0.0 && on_seg(a1, a2, b2) { return true; }
+            if o3 == 0.0 && on_seg(b1, b2, a1) { return true; }
+            if o4 == 0.0 && on_seg(b1, b2, a2) { return true; }
+            (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
+        }
+
+        // start point lowest y then x
+        let start_idx = points.iter().enumerate().min_by(|a, b| {
+            a.1.y.partial_cmp(&b.1.y).unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.1.x.partial_cmp(&b.1.x).unwrap_or(std::cmp::Ordering::Equal))
+        })?.0;
+        let start = points[start_idx];
+        let mut remaining: Vec<egui::Pos2> = points.clone();
+        // Start with a small k to encourage concavity and increase gradually if needed
+        let mut k = (3 + (remaining.len() / 20)).clamp(3, 7);
+        let k_max = remaining.len().saturating_sub(1).min(20).max(3);
+
+        // Try increasing k if necessary
+        while k <= k_max {
+            let mut hull: Vec<egui::Pos2> = Vec::new();
+            hull.push(start);
+            let mut current = start;
+            // Initial direction: to the left
+            let mut prev_dir = egui::vec2(-1.0, 0.0);
+            for _step in 0..(remaining.len() * 8) { // safe guard
+                // nearest k not yet in hull, allowing start only if closing
+                let mut neigh = remaining.clone();
+                neigh.sort_by(|a, b| dist2(current, *a).partial_cmp(&dist2(current, *b)).unwrap_or(std::cmp::Ordering::Equal));
+                let mut chosen: Option<egui::Pos2> = None;
+                let mut best_angle = f32::INFINITY;
+                for cand in neigh.into_iter().take(k) {
+                    if hull.len() > 2 && cand == start { /* allow only for closure */ }
+                    if hull.contains(&cand) && cand != start { continue; }
+                    let ang = angle_between(prev_dir, current, cand);
+                    // prefer small positive turn
+                    if ang < best_angle {
+                        // check intersection with existing edges (skip adjacent)
+                        let mut ok = true;
+                        if let Some(&last) = hull.last() {
+                            for i in 0..(hull.len().saturating_sub(2)) {
+                                if segments_intersect(hull[i], hull[i + 1], last, cand) {
+                                    ok = false; break;
+                                }
+                            }
+                        }
+                        if ok {
+                            chosen = Some(cand);
+                            best_angle = ang;
+                        }
+                    }
+                }
+                if let Some(next) = chosen {
+                    prev_dir = egui::vec2(next.x - current.x, next.y - current.y);
+                    current = next;
+                    if current == start { break; }
+                    hull.push(current);
+                } else {
+                    break; // failed at this k
+                }
+            }
+            if hull.len() >= 3 && *hull.first().unwrap() == *hull.last().unwrap_or(&hull[0]) {
+                // Remove duplicate end if present
+                if hull.len() >= 2 && hull[hull.len() - 1] == hull[0] { hull.pop(); }
+            }
+            if hull.len() >= 3 {
+                return Some(hull);
+            }
+            k += 1;
+        }
+
+        // Fallback
+        self.group_world_polygon(group_id)
+    }
+
     /// Returns a group id if the world position is inside any group's background shape.
     fn find_group_at_position(&self, world_pos: egui::Pos2) -> Option<crate::types::GroupId> {
         // If multiple hit, prefer the smallest area (innermost group)
@@ -462,16 +607,20 @@ impl FlowchartApp {
                         // Quick bbox reject
                         let bbox = egui::Rect::from_points(&poly);
                         if bbox.contains(world_pos) {
-                            // Point-in-polygon (winding not needed for convex); use cross sign check
-                            let mut inside = true;
+                            // Ray casting point-in-polygon (works for concave/convex)
+                            let mut inside = false;
+                            let mut j = poly.len() - 1;
                             for i in 0..poly.len() {
-                                let a = poly[i];
-                                let b = poly[(i + 1) % poly.len()];
-                                if (b.x - a.x) * (world_pos.y - a.y) - (b.y - a.y) * (world_pos.x - a.x) < 0.0
-                                {
-                                    inside = false;
-                                    break;
+                                let pi = poly[i];
+                                let pj = poly[j];
+                                let intersect = ((pi.y > world_pos.y) != (pj.y > world_pos.y))
+                                    && (world_pos.x
+                                        < (pj.x - pi.x) * (world_pos.y - pi.y) / ((pj.y - pi.y).max(1e-6f32))
+                                            + pi.x);
+                                if intersect {
+                                    inside = !inside;
                                 }
+                                j = i;
                             }
                             if inside {
                                 let area = bbox.area();
@@ -481,6 +630,35 @@ impl FlowchartApp {
                                         if area < best_area {
                                             best = Some((*gid, area));
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::types::GroupDrawingMode::TightPolygon => {
+                    if let Some(poly) = self.group_world_polygon_tight(*gid).or_else(|| self.group_world_polygon(*gid)) {
+                        let bbox = egui::Rect::from_points(&poly);
+                        if bbox.contains(world_pos) {
+                            // Ray casting
+                            let mut inside = false;
+                            let mut j = poly.len() - 1;
+                            for i in 0..poly.len() {
+                                let pi = poly[i];
+                                let pj = poly[j];
+                                let intersect = ((pi.y > world_pos.y) != (pj.y > world_pos.y))
+                                    && (world_pos.x
+                                        < (pj.x - pi.x) * (world_pos.y - pi.y) / ((pj.y - pi.y).max(1e-6f32))
+                                            + pi.x);
+                                if intersect { inside = !inside; }
+                                j = i;
+                            }
+                            if inside {
+                                let area = bbox.area();
+                                match best {
+                                    None => best = Some((*gid, area)),
+                                    Some((_, best_area)) => {
+                                        if area < best_area { best = Some((*gid, area)); }
                                     }
                                 }
                             }
@@ -966,6 +1144,7 @@ impl FlowchartApp {
                         .selected_text(match drawing {
                             crate::types::GroupDrawingMode::Rectangle => "Rectangle",
                             crate::types::GroupDrawingMode::Polygon => "Polygon",
+                            crate::types::GroupDrawingMode::TightPolygon => "Tight Polygon",
                         })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -977,6 +1156,11 @@ impl FlowchartApp {
                                 &mut drawing,
                                 crate::types::GroupDrawingMode::Polygon,
                                 "Polygon",
+                            );
+                            ui.selectable_value(
+                                &mut drawing,
+                                crate::types::GroupDrawingMode::TightPolygon,
+                                "Tight Polygon",
                             );
                         });
                     if drawing != group.drawing {

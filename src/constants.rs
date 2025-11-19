@@ -11,6 +11,10 @@ pub const GROUP_STROKE_WIDTH: f32 = 1.5;
 /// Base padding for positioning the group label inside the rect. Scaled by zoom.
 pub const GROUP_LABEL_PADDING_BASE: f32 = 6.0;
 
+/// Factor applied to GROUP_PADDING when computing the "Tight Polygon" group shape.
+/// Values < 1.0 make the tight polygon hug nodes more closely than the regular polygon.
+pub const TIGHT_PADDING_FACTOR: f32 = 0.65;
+
 // Node dimensions
 /// Default node width in world units.
 pub const NODE_WIDTH: f32 = 100.0;

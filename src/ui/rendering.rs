@@ -83,45 +83,33 @@ impl FlowchartApp {
                 }
                 crate::types::GroupDrawingMode::Polygon => {
                     if let Some(world_poly) = self.group_world_polygon(*gid) {
-                        // Transform to screen
-                        let mut screen_points: Vec<egui::Pos2> = Vec::with_capacity(world_poly.len());
-                        for p in &world_poly {
-                            screen_points.push(self.world_to_screen(*p));
-                        }
-                        // Fill and stroke polygon
-                        painter.add(eframe::epaint::Shape::convex_polygon(
-                            screen_points.clone(),
+                        self.draw_rounded_polygon_and_label(
+                            painter,
+                            &world_poly,
                             fill,
                             egui::Stroke::new(
                                 crate::constants::GROUP_STROKE_WIDTH,
                                 stroke_color,
                             ),
-                        ));
-
-                        // Label using polygon bbox
-                        let bbox_world = egui::Rect::from_points(&world_poly);
-                        let min = self.world_to_screen(bbox_world.min);
-                        let max = self.world_to_screen(bbox_world.max);
-                        let screen_rect = egui::Rect::from_min_max(min, max);
-
-                        let mut text = group.name.as_str();
-                        if text.is_empty() {
-                            text = "Unnamed Group";
-                        }
-                        let padding = crate::constants::GROUP_LABEL_PADDING_BASE
-                            * self.canvas.zoom_factor.max(0.5);
-                        let pos = egui::pos2(
-                            screen_rect.min.x + padding,
-                            screen_rect.max.y - padding,
+                            &group.name,
                         );
-                        let text_color = if self.dark_mode {
-                            egui::Color32::from_gray(220)
-                        } else {
-                            egui::Color32::from_gray(40)
-                        };
-                        let font_size = (12.0 * self.canvas.zoom_factor).clamp(8.0, 24.0);
-                        let font = egui::FontId::proportional(font_size);
-                        painter.text(pos, egui::Align2::LEFT_BOTTOM, text, font, text_color);
+                    }
+                }
+                crate::types::GroupDrawingMode::TightPolygon => {
+                    if let Some(world_poly) = self
+                        .group_world_polygon_tight(*gid)
+                        .or_else(|| self.group_world_polygon(*gid))
+                    {
+                        self.draw_rounded_polygon_and_label(
+                            painter,
+                            &world_poly,
+                            fill,
+                            egui::Stroke::new(
+                                crate::constants::GROUP_STROKE_WIDTH,
+                                stroke_color,
+                            ),
+                            &group.name,
+                        );
                     }
                 }
             }
@@ -156,6 +144,52 @@ impl FlowchartApp {
             painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
         }
     }
+
+    /// Draw a (possibly concave) polygon with rounded corners in screen space, and center the label inside.
+    fn draw_rounded_polygon_and_label(
+        &self,
+        painter: &egui::Painter,
+        world_poly: &[egui::Pos2],
+        fill: egui::Color32,
+        stroke: egui::Stroke,
+        name: &str,
+    ) {
+        if world_poly.len() < 3 {
+            return;
+        }
+        // Transform to screen space
+        let mut screen_pts: Vec<egui::Pos2> = world_poly.iter().map(|p| self.world_to_screen(*p)).collect();
+
+        // Corner rounding radius in screen pixels
+        let radius = crate::constants::GROUP_CORNER_RADIUS;
+        let rounded = round_polygon_points(&screen_pts, radius, 6);
+
+        // Draw filled/stroked path
+        painter.add(eframe::epaint::Shape::Path(eframe::epaint::PathShape {
+            points: rounded,
+            closed: true,
+            fill,
+            stroke: stroke.into(),
+        }));
+
+        // Compute centroid in world space (area-weighted), then transform
+        let centroid_world = polygon_centroid(world_poly).unwrap_or_else(|| {
+            let r = egui::Rect::from_points(world_poly);
+            r.center()
+        });
+        let label_pos = self.world_to_screen(centroid_world);
+        let mut text = if name.is_empty() { "Unnamed Group" } else { name };
+        let text_color = if self.dark_mode {
+            egui::Color32::from_gray(220)
+        } else {
+            egui::Color32::from_gray(40)
+        };
+        let font_size = (12.0 * self.canvas.zoom_factor).clamp(8.0, 24.0);
+        let font = egui::FontId::proportional(font_size);
+        painter.text(label_pos, egui::Align2::CENTER_CENTER, text, font, text_color);
+    }
+
+    /// Draws a zoom-aware grid on the canvas for visual reference.
 
     /// Draws a zoom-aware grid on the canvas for visual reference.
     ///
@@ -665,6 +699,190 @@ impl FlowchartApp {
 
         lines
     }
+}
+
+// ===== Helper geometry functions for polygon rendering =====
+
+/// Compute the signed area and centroid of a simple polygon in world space.
+/// Returns None for degenerate polygons.
+fn polygon_centroid(points: &[egui::Pos2]) -> Option<egui::Pos2> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut a = 0.0f32;
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+    for i in 0..points.len() {
+        let p = points[i];
+        let q = points[(i + 1) % points.len()];
+        let cross = p.x * q.y - q.x * p.y;
+        a += cross;
+        cx += (p.x + q.x) * cross;
+        cy += (p.y + q.y) * cross;
+    }
+    if a.abs() < 1e-6 {
+        return None;
+    }
+    let inv = 1.0 / (3.0 * a);
+    Some(egui::pos2(cx * inv, cy * inv))
+}
+
+/// Generate a rounded-corner approximation of a closed polygon in screen space.
+/// `radius_px` is the corner radius in pixels, and `segments_per_corner` controls smoothness.
+fn round_polygon_points(
+    points: &[egui::Pos2],
+    radius_px: f32,
+    segments_per_corner: usize,
+) -> Vec<egui::Pos2> {
+    // Rounded polygon using offset-line intersection to create outward arcs on convex corners.
+    let n = points.len();
+    if n < 3 || radius_px <= 0.0 || segments_per_corner == 0 {
+        return points.to_vec();
+    }
+
+    // Determine polygon orientation on screen.
+    // Note: egui screen coordinates have Y increasing downward, which flips the usual
+    // shoelace signed area sign. A visually counter-clockwise polygon yields NEGATIVE area.
+    let mut signed_area = 0.0f32;
+    for i in 0..n {
+        let p = points[i];
+        let q = points[(i + 1) % n];
+        signed_area += p.x * q.y - q.x * p.y;
+    }
+    let ccw = signed_area < 0.0; // true if visually CCW in screen space
+    let segs = segments_per_corner.max(1);
+
+    fn perp_left(v: egui::Vec2) -> egui::Vec2 { egui::vec2(-v.y, v.x) }
+
+    // Helper to project a point onto an infinite line defined by point A and direction dir (unit not required)
+    fn project_point_on_line(a: egui::Pos2, dir: egui::Vec2, p: egui::Pos2) -> egui::Pos2 {
+        let dir2 = dir.length_sq().max(1e-12);
+        let ap = egui::vec2(p.x - a.x, p.y - a.y);
+        let t = ap.dot(dir) / dir2;
+        egui::pos2(a.x + dir.x * t, a.y + dir.y * t)
+    }
+
+    // Intersect two infinite lines: A + d1*t1 and B + d2*t2. Returns None if parallel.
+    fn intersect_lines(a: egui::Pos2, d1: egui::Vec2, b: egui::Pos2, d2: egui::Vec2) -> Option<egui::Pos2> {
+        let denom = d1.x * d2.y - d1.y * d2.x; // cross(d1, d2)
+        if denom.abs() < 1e-6 {
+            return None;
+        }
+        // Solve for t: a + d1*t = b + d2*u  => d1*t - d2*u = (b - a)
+        let ba = egui::vec2(b.x - a.x, b.y - a.y);
+        let t = (ba.x * d2.y - ba.y * d2.x) / denom; // cross(ba, d2) / cross(d1,d2)
+        Some(egui::pos2(a.x + d1.x * t, a.y + d1.y * t))
+    }
+
+    // Normalize angle to [0, 2pi)
+    fn norm_angle(mut a: f32) -> f32 {
+        while a < 0.0 { a += std::f32::consts::TAU; }
+        while a >= std::f32::consts::TAU { a -= std::f32::consts::TAU; }
+        a
+    }
+
+    let mut out: Vec<egui::Pos2> = Vec::with_capacity(n * (segs + 1));
+
+    for i in 0..n {
+        let prev = points[(i + n - 1) % n];
+        let curr = points[i];
+        let next = points[(i + 1) % n];
+
+        let e1 = egui::vec2(curr.x - prev.x, curr.y - prev.y);
+        let e2 = egui::vec2(next.x - curr.x, next.y - curr.y);
+        let len1 = e1.length().max(1e-6);
+        let len2 = e2.length().max(1e-6);
+        let d1 = e1 / len1; // direction along edge prev->curr
+        let d2 = e2 / len2; // direction along edge curr->next
+
+        // Classify corner as convex or concave with respect to polygon winding.
+        // cross(d1, d2) > 0 means a left turn from d1 to d2 in screen coords.
+        let turn = d1.x * d2.y - d1.y * d2.x;
+        // In egui's Y-down space, the sign for "convex" relative to visual CCW is inverted.
+        // For visually CCW polygons (ccw == true), a convex interior corner has turn < 0.
+        // For visually CW polygons, a convex interior corner has turn > 0.
+        let is_convex = if ccw { turn < 0.0 } else { turn > 0.0 };
+
+        // Limit radius so that the arc stays within the available edge lengths
+        let r_max1 = 0.5 * len1;
+        let r_max2 = 0.5 * len2;
+        let r = radius_px.min(r_max1).min(r_max2);
+        if r <= 0.0 {
+            out.push(curr);
+            continue;
+        }
+
+        // For concave corners, do not produce an exterior bulge; keep the vertex as-is for robustness.
+        if !is_convex {
+            out.push(curr);
+            continue;
+        }
+
+        // Choose EXTERIOR normal direction depending on winding so rounding bulges outward,
+        // avoiding eating into the polygon area. In Y-down, exterior is to the right of edges
+        // for visually CCW polygons.
+        let side = if ccw { 1.0 } else { -1.0 };
+        let n1 = perp_left(d1) * side; // exterior normal for edge1
+        let n2 = perp_left(d2) * side; // exterior normal for edge2
+
+        // Offset lines by radius towards the EXTERIOR
+        let p1_off = egui::pos2(curr.x + n1.x * r, curr.y + n1.y * r);
+        let p2_off = egui::pos2(curr.x + n2.x * r, curr.y + n2.y * r);
+
+        // Intersection of the two offset lines is the arc center
+        let center_opt = intersect_lines(p1_off, d1, p2_off, d2);
+        let center = if let Some(c) = center_opt { c } else {
+            // Fallback: if nearly straight or parallel, approximate by placing a single point
+            out.push(curr);
+            continue;
+        };
+
+        // Tangency points are projections of center onto the original edge lines
+        let t1 = project_point_on_line(curr, d1, center); // on line through prev->curr
+        let t2 = project_point_on_line(curr, d2, center); // on line through curr->next
+
+        // Clamp tangency points to be not too far from the corner to avoid overshoot on very short edges
+        // Move them towards curr if they are farther than len/2
+        let clamp_on_edge = |tp: egui::Pos2, base: egui::Pos2, max_dist: f32| {
+            let v = egui::vec2(tp.x - base.x, tp.y - base.y);
+            let l = v.length();
+            if l > max_dist && l > 1e-6 {
+                let f = max_dist / l;
+                egui::pos2(base.x + v.x * f, base.y + v.y * f)
+            } else {
+                tp
+            }
+        };
+        let t1 = clamp_on_edge(t1, curr, r_max1);
+        let t2 = clamp_on_edge(t2, curr, r_max2);
+
+        // Angles of tangent points around center
+        let a1 = (t1.y - center.y).atan2(t1.x - center.x);
+        let a2 = (t2.y - center.y).atan2(t2.x - center.x);
+
+        // Generate the MINIMAL arc from t1 to t2 to avoid loops.
+        // We do NOT force sweep by polygon winding; we always choose the shorter
+        // angular distance (|delta| <= PI). The sign of delta determines CCW (>0)
+        // or CW (<0) sampling.
+        let mut delta = a2 - a1;
+        while delta <= -std::f32::consts::PI { delta += std::f32::consts::TAU; }
+        while delta > std::f32::consts::PI { delta -= std::f32::consts::TAU; }
+
+        // Guard: if delta is too small (degenerate), just emit the tangency point once.
+        if delta.abs() < 1e-4 {
+            out.push(t1);
+            continue;
+        }
+
+        let start = a1;
+        for s in 0..=segs {
+            let t = s as f32 / segs as f32;
+            let ang = start + delta * t;
+            out.push(egui::pos2(center.x - ang.cos() * r, center.y - ang.sin() * r));
+        }
+    }
+
+    out
 }
 
 /// Helper function to create a JavaScript syntax highlighting layouter for text editors.

@@ -98,6 +98,8 @@ pub enum GroupDrawingMode {
     Rectangle,
     /// Draw a shrink-wrapped polygon (convex hull) around members with padding.
     Polygon,
+    /// Draw a tighter shrink-wrapped polygon (concave hull) around members with padding.
+    TightPolygon,
 }
 
 impl Default for GroupDrawingMode {
