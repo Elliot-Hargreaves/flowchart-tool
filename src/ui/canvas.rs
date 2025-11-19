@@ -205,17 +205,22 @@ impl FlowchartApp {
             }
 
             // If there was a pending shift-click on a node and we never started drawing a connection,
-            // interpret this as an additive selection of that node.
+            // interpret this as a toggle selection of that node.
             if let Some(node_id) = self.interaction.pending_shift_connection_from.take() {
-                // Add to selection if not already present
-                if !self.interaction.selected_nodes.contains(&node_id) {
+                if let Some(pos) = self
+                    .interaction
+                    .selected_nodes
+                    .iter()
+                    .position(|id| *id == node_id)
+                {
+                    self.interaction.selected_nodes.remove(pos);
+                } else {
                     self.interaction.selected_nodes.push(node_id);
                 }
                 // Clear other selection kinds and sync single-selection helper
-                if self.interaction.selected_nodes.len() == 1 {
-                    self.interaction.selected_node = Some(node_id);
-                } else {
-                    self.interaction.selected_node = None;
+                match self.interaction.selected_nodes.as_slice() {
+                    [only] => self.interaction.selected_node = Some(*only),
+                    _ => self.interaction.selected_node = None,
                 }
                 self.interaction.selected_group = None;
                 self.interaction.selected_connection = None;

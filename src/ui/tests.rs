@@ -846,6 +846,139 @@ fn shift_marquee_adds_nodes_to_existing_selection() {
 }
 
 #[test]
+fn shift_click_on_selected_node_deselects_it() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let n1 = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (200.0, 200.0),
+        NodeType::Transformer { script: "".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    let ctx = egui::Context::default();
+    let p = egui::pos2(200.0, 200.0);
+
+    // Normal click to select
+    for events in [
+        vec![egui::Event::PointerMoved(p)],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    assert_eq!(app.interaction.selected_nodes, vec![n1]);
+
+    // Shift-click same node to toggle off
+    for (mods, events) in [
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerMoved(p)]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.modifiers = mods;
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    assert!(app.interaction.selected_nodes.is_empty(), "Shift-click on an already selected node should deselect it");
+    assert!(app.interaction.selected_node.is_none());
+}
+
+#[test]
+fn shift_click_toggles_in_multi_selection() {
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    let n1 = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (150.0, 150.0),
+        NodeType::Transformer { script: "".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+    let n2 = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (350.0, 150.0),
+        NodeType::Transformer { script: "".into(), selected_outputs: None, globals: Default::default(), initial_globals: Default::default() },
+    ));
+
+    let ctx = egui::Context::default();
+    let p1 = egui::pos2(150.0, 150.0);
+    let p2 = egui::pos2(350.0, 150.0);
+
+    // Select n1
+    for events in [
+        vec![egui::Event::PointerMoved(p1)],
+        vec![egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+    assert_eq!(app.interaction.selected_nodes, vec![n1]);
+
+    // Shift-click to add n2
+    for (mods, events) in [
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerMoved(p2)]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p2, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p2, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.modifiers = mods;
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    let mut sel = app.interaction.selected_nodes.clone();
+    sel.sort_by_key(|id| id.as_u128());
+    let mut expected = vec![n1, n2];
+    expected.sort_by_key(|id| id.as_u128());
+    assert_eq!(sel, expected);
+
+    // Shift-click n2 again to remove it, leaving only n1
+    for (mods, events) in [
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerMoved(p2)]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p2, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]),
+        (egui::Modifiers { shift: true, ..Default::default() }, vec![egui::Event::PointerButton { pos: p2, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }]),
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.modifiers = mods;
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| {
+            ctx.set_visuals(egui::Visuals::dark());
+            egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui));
+        });
+    }
+
+    assert_eq!(app.interaction.selected_nodes, vec![n1]);
+    assert_eq!(app.interaction.selected_node, Some(n1));
+}
+
+#[test]
 fn drawing_canvas_with_node_produces_shapes() {
     let mut app = FlowchartApp::default();
     app.node_counter = 1; // skip auto-centering

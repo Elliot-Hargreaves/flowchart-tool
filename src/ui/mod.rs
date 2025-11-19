@@ -2184,15 +2184,21 @@ impl FlowchartApp {
                 if let Some(node_id) = self.find_node_at_position(world_pos) {
                     let shift = ui.input(|i| i.modifiers.shift);
                     if shift {
-                        // Additive selection: add node without clearing others
-                        if !self.interaction.selected_nodes.contains(&node_id) {
+                        // Toggle selection membership on Shift-click
+                        if let Some(pos) = self
+                            .interaction
+                            .selected_nodes
+                            .iter()
+                            .position(|id| *id == node_id)
+                        {
+                            self.interaction.selected_nodes.remove(pos);
+                        } else {
                             self.interaction.selected_nodes.push(node_id);
                         }
                         // Convenience single-selection sync
-                        if self.interaction.selected_nodes.len() == 1 {
-                            self.interaction.selected_node = Some(node_id);
-                        } else {
-                            self.interaction.selected_node = None;
+                        match self.interaction.selected_nodes.as_slice() {
+                            [only] => self.interaction.selected_node = Some(*only),
+                            _ => self.interaction.selected_node = None,
                         }
                     } else {
                         // Normal single selection
