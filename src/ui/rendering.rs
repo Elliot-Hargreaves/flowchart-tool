@@ -45,11 +45,15 @@ impl FlowchartApp {
                 } else {
                     egui::Color32::from_rgba_unmultiplied(128, 128, 128, 128)
                 };
-                painter.rect_filled(screen_rect, 8.0, fill);
+                painter.rect_filled(
+                    screen_rect,
+                    crate::constants::GROUP_CORNER_RADIUS,
+                    fill,
+                );
                 painter.rect_stroke(
                     screen_rect,
-                    8.0,
-                    egui::Stroke::new(1.5, stroke_color),
+                    crate::constants::GROUP_CORNER_RADIUS,
+                    egui::Stroke::new(crate::constants::GROUP_STROKE_WIDTH, stroke_color),
                     StrokeKind::Inside,
                 );
 
@@ -59,7 +63,8 @@ impl FlowchartApp {
                 if text.is_empty() {
                     text = "Unnamed Group";
                 }
-                let padding = 6.0 * self.canvas.zoom_factor.max(0.5);
+                let padding = crate::constants::GROUP_LABEL_PADDING_BASE
+                    * self.canvas.zoom_factor.max(0.5);
                 let pos = egui::pos2(screen_rect.min.x + padding, screen_rect.max.y - padding);
                 // Choose a subtle but readable color; use stroke_color for contrast
                 let text_color = if self.dark_mode {
@@ -120,7 +125,7 @@ impl FlowchartApp {
     /// * `painter` - The egui painter for drawing operations
     /// * `canvas_rect` - The screen-space rectangle defining visible area
     pub fn draw_grid(&self, painter: &egui::Painter, canvas_rect: egui::Rect) {
-        const GRID_SIZE: f32 = 20.0;
+        let grid_size = crate::constants::GRID_SIZE;
         let grid_color = egui::Color32::from_rgba_unmultiplied(128, 128, 128, 32);
         let stroke = egui::Stroke::new(1.0, grid_color);
 
@@ -129,13 +134,13 @@ impl FlowchartApp {
         let bottom_right_world = self.screen_to_world(canvas_rect.max);
 
         // Calculate grid range in world coordinates
-        let start_x = (top_left_world.x / GRID_SIZE).floor() * GRID_SIZE;
-        let end_x = (bottom_right_world.x / GRID_SIZE).ceil() * GRID_SIZE;
-        let start_y = (top_left_world.y / GRID_SIZE).floor() * GRID_SIZE;
-        let end_y = (bottom_right_world.y / GRID_SIZE).ceil() * GRID_SIZE;
+        let start_x = (top_left_world.x / grid_size).floor() * grid_size;
+        let end_x = (bottom_right_world.x / grid_size).ceil() * grid_size;
+        let start_y = (top_left_world.y / grid_size).floor() * grid_size;
+        let end_y = (bottom_right_world.y / grid_size).ceil() * grid_size;
 
         // Only draw grid if zoom level makes it reasonable to see
-        let screen_grid_size = GRID_SIZE * self.canvas.zoom_factor;
+        let screen_grid_size = grid_size * self.canvas.zoom_factor;
         if screen_grid_size < 2.0 {
             // Grid too small to see clearly, skip drawing
             return;
@@ -156,7 +161,7 @@ impl FlowchartApp {
                     stroke,
                 );
             }
-            x += GRID_SIZE;
+            x += grid_size;
         }
 
         // Draw horizontal grid lines
@@ -174,7 +179,7 @@ impl FlowchartApp {
                     stroke,
                 );
             }
-            y += GRID_SIZE;
+            y += grid_size;
         }
 
         // Draw axis lines more prominently when zoomed in
@@ -326,9 +331,9 @@ impl FlowchartApp {
         end: egui::Pos2,
         message_count: usize,
     ) {
-        const GRID_WIDTH: usize = 5;
-        const DOT_SPACING: f32 = 8.0;
-        const DOT_RADIUS: f32 = 3.0;
+        let grid_width = crate::constants::GRID_WIDTH;
+        let dot_spacing = crate::constants::DOT_SPACING;
+        let dot_radius = crate::constants::DOT_RADIUS;
 
         // Calculate center point of the connection
         let center = start + (end - start) * 0.5;
@@ -341,12 +346,12 @@ impl FlowchartApp {
         let grid_offset = perpendicular * 15.0 * self.canvas.zoom_factor;
 
         // Calculate grid dimensions
-        let _rows = message_count.div_ceil(GRID_WIDTH);
-        let _cols = usize::min(GRID_WIDTH, message_count);
+        let _rows = message_count.div_ceil(grid_width);
+        let _cols = usize::min(grid_width, message_count);
 
         // Calculate starting position (offset from center)
-        let grid_width_pixels = -(GRID_WIDTH as f32) * DOT_SPACING * self.canvas.zoom_factor;
-        let grid_height_pixels = (GRID_WIDTH - 1) as f32 * DOT_SPACING * self.canvas.zoom_factor;
+        let grid_width_pixels = -(grid_width as f32) * dot_spacing * self.canvas.zoom_factor;
+        let grid_height_pixels = (grid_width - 1) as f32 * dot_spacing * self.canvas.zoom_factor;
 
         let grid_start = center + grid_offset
             - perpendicular * grid_width_pixels * 0.5
@@ -354,14 +359,14 @@ impl FlowchartApp {
 
         // Draw each dot in the grid
         for i in 0..message_count {
-            let row = i / GRID_WIDTH;
-            let col = i % GRID_WIDTH;
+            let row = i / grid_width;
+            let col = i % grid_width;
 
             let dot_pos = grid_start
-                + perpendicular * (row as f32 * DOT_SPACING * self.canvas.zoom_factor)
-                + direction * (col as f32 * DOT_SPACING * self.canvas.zoom_factor);
+                + perpendicular * (row as f32 * dot_spacing * self.canvas.zoom_factor)
+                + direction * (col as f32 * dot_spacing * self.canvas.zoom_factor);
 
-            let scaled_radius = DOT_RADIUS * self.canvas.zoom_factor;
+            let scaled_radius = dot_radius * self.canvas.zoom_factor;
             painter.circle_filled(dot_pos, scaled_radius, egui::Color32::YELLOW);
             painter.circle_stroke(
                 dot_pos,
@@ -442,12 +447,12 @@ impl FlowchartApp {
     /// * `painter` - The egui painter for drawing operations
     /// * `node` - The node to render
     pub fn draw_node(&self, painter: &egui::Painter, node: &FlowchartNode) {
-        const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
+        let node_size = egui::vec2(crate::constants::NODE_WIDTH, crate::constants::NODE_HEIGHT);
 
         // Apply zoom and canvas offset for proper positioning
         let world_pos = egui::pos2(node.position.0, node.position.1);
         let screen_pos = self.world_to_screen(world_pos);
-        let scaled_size = NODE_SIZE * self.canvas.zoom_factor;
+        let scaled_size = node_size * self.canvas.zoom_factor;
         let rect = egui::Rect::from_center_size(screen_pos, scaled_size);
 
         // Determine node color based on type

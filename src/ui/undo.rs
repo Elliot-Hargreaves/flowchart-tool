@@ -4,10 +4,11 @@
 //! types of operations including node movements, property changes, and deletions.
 
 use crate::types::*;
+use crate::constants::MAX_UNDO_HISTORY;
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of undo actions to keep in history
-const MAX_UNDO_HISTORY: usize = 100;
+/// See crate::constants::MAX_UNDO_HISTORY
 
 /// Represents different types of actions that can be undone.
 #[derive(Debug, Clone, Serialize, Deserialize)]

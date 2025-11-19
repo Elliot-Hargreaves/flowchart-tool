@@ -319,6 +319,10 @@ impl FlowchartApp {
                     members: nodes_to_group,
                 },
             );
+            // Record undo action for group creation
+            self
+                .undo_history
+                .push_action(UndoAction::GroupCreated { group_id: gid });
             // Select the new group
             self.interaction.selected_group = Some(gid);
             self.interaction.selected_node = None;
@@ -337,10 +341,10 @@ impl FlowchartApp {
 
     /// Computes the world-space rect of a node (centered at position) with padding 0.
     fn node_world_rect(&self, node: &FlowchartNode) -> egui::Rect {
-        // Keep in sync with rendering NODE_SIZE
-        const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
+        // Keep in sync with rendering node size
+        let node_size = egui::vec2(crate::constants::NODE_WIDTH, crate::constants::NODE_HEIGHT);
         let center = egui::pos2(node.position.0, node.position.1);
-        egui::Rect::from_center_size(center, NODE_SIZE)
+        egui::Rect::from_center_size(center, node_size)
     }
 
     /// Computes the world-space bounding rect of a group with padding.
@@ -357,7 +361,7 @@ impl FlowchartApp {
             }
         }
         rect_opt.map(|r| {
-            let pad = 16.0;
+            let pad = crate::constants::GROUP_PADDING;
             r.expand2(egui::vec2(pad, pad))
         })
     }

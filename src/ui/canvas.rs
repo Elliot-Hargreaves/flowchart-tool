@@ -47,10 +47,10 @@ impl FlowchartApp {
     ///
     /// The snapped position on the grid
     pub fn snap_to_grid(&self, pos: egui::Pos2) -> egui::Pos2 {
-        const GRID_SIZE: f32 = 20.0;
+        let grid = crate::constants::GRID_SIZE;
         egui::pos2(
-            (pos.x / GRID_SIZE).round() * GRID_SIZE,
-            (pos.y / GRID_SIZE).round() * GRID_SIZE,
+            (pos.x / grid).round() * grid,
+            (pos.y / grid).round() * grid,
         )
     }
 
@@ -394,11 +394,11 @@ impl FlowchartApp {
     ///
     /// The ID of the node at that position, or `None` if no node is there
     pub fn find_node_at_position(&self, pos: egui::Pos2) -> Option<NodeId> {
-        const NODE_SIZE: egui::Vec2 = egui::Vec2::new(100.0, 70.0);
+        let node_size = egui::vec2(crate::constants::NODE_WIDTH, crate::constants::NODE_HEIGHT);
 
         for (id, node) in &self.flowchart.nodes {
             let node_pos = egui::pos2(node.position.0, node.position.1);
-            let rect = egui::Rect::from_center_size(node_pos, NODE_SIZE);
+            let rect = egui::Rect::from_center_size(node_pos, node_size);
 
             if rect.contains(pos) {
                 return Some(*id);
@@ -419,7 +419,7 @@ impl FlowchartApp {
     ///
     /// The index of the connection in the connections vector, or `None` if no connection is there
     pub fn find_connection_at_position(&self, pos: egui::Pos2) -> Option<usize> {
-        const CLICK_THRESHOLD: f32 = 10.0; // pixels in world space
+        let click_threshold = crate::constants::CLICK_THRESHOLD; // pixels in world space
 
         for (idx, connection) in self.flowchart.connections.iter().enumerate() {
             if let (Some(from_node), Some(to_node)) = (
@@ -432,7 +432,7 @@ impl FlowchartApp {
                 // Calculate distance from point to line segment
                 let distance = self.point_to_line_distance(pos, start, end);
 
-                if distance < CLICK_THRESHOLD {
+                if distance < click_threshold {
                     return Some(idx);
                 }
             }

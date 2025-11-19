@@ -175,6 +175,137 @@ fn group_creation_via_shortcut_selects_and_starts_name_edit() {
 }
 
 #[test]
+fn group_creation_undo_removes_group() {
+    let mut app = FlowchartApp::default();
+
+    // Deterministic canvas
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Two nodes to group
+    let n1 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let n2 = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    // Select both
+    app.interaction.selected_nodes = vec![n1, n2];
+    app.interaction.selected_node = None;
+
+    // Trigger Ctrl/Cmd+G
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw.events = vec![egui::Event::Key {
+        key: egui::Key::G,
+        physical_key: Some(egui::Key::G),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+    }];
+    let _ = ctx.run(raw, |ctx| {
+        app.handle_group_shortcuts(ctx);
+    });
+
+    assert_eq!(app.flowchart.groups.len(), 1);
+    let gid = app.interaction.selected_group.expect("group should be selected");
+    assert!(app.flowchart.groups.contains_key(&gid));
+
+    // Now undo should remove the created group
+    app.perform_undo();
+    assert_eq!(app.flowchart.groups.len(), 0);
+    assert!(app.interaction.selected_group.is_none());
+}
+
+#[test]
+fn group_creation_undo_redo_restores_group_and_members() {
+    let mut app = FlowchartApp::default();
+
+    // Deterministic canvas
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Three nodes; group two of them
+    let a = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "A".into(),
+            (0.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let b = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "B".into(),
+            (120.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+    let _c = app
+        .flowchart
+        .add_node(FlowchartNode::new(
+            "C".into(),
+            (240.0, 0.0),
+            NodeType::Consumer { consumption_rate: 1 },
+        ));
+
+    app.interaction.selected_nodes = vec![a, b];
+    app.interaction.selected_node = None;
+
+    // Create group via shortcut
+    let ctx = egui::Context::default();
+    let mut raw = egui::RawInput::default();
+    raw.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1200.0, 800.0),
+    ));
+    raw.events = vec![egui::Event::Key {
+        key: egui::Key::G,
+        physical_key: Some(egui::Key::G),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers {
+            command: true,
+            ..Default::default()
+        },
+    }];
+    let _ = ctx.run(raw, |ctx| app.handle_group_shortcuts(ctx));
+
+    assert_eq!(app.flowchart.groups.len(), 1);
+    let gid = app.interaction.selected_group.unwrap();
+    let original_members = app.flowchart.groups[&gid].members.clone();
+
+    // Undo removes group
+    app.perform_undo();
+    assert!(app.flowchart.groups.is_empty());
+
+    // Redo brings it back with same membership
+    app.perform_redo();
+    assert_eq!(app.flowchart.groups.len(), 1);
+    let gid2 = app.flowchart.groups.keys().next().cloned().unwrap();
+    let mut restored = app.flowchart.groups[&gid2].members.clone();
+    let mut expected = original_members.clone();
+    restored.sort();
+    expected.sort();
+    assert_eq!(restored, expected);
+}
+
+#[test]
 fn properties_panel_enters_group_name_edit_and_focuses() {
     let mut app = FlowchartApp::default();
 

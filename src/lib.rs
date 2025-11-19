@@ -21,6 +21,7 @@ pub mod script_engine;
 pub mod simulation;
 pub mod types;
 pub mod ui;
+pub mod constants;
 
 // Re-export public types and functions
 pub use simulation::*;
