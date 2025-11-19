@@ -5,6 +5,7 @@
 //! and file operations.
 
 use super::undo::UndoHistory;
+use crate::examples::ExampleKind;
 use crate::simulation::SimulationEngine;
 use crate::types::*;
 use eframe::egui;
@@ -248,6 +249,9 @@ pub struct FileState {
     /// The action the user attempted that requires confirmation (e.g., New or Quit)
     #[serde(skip)]
     pub pending_confirm_action: Option<PendingConfirmAction>,
+    /// If the pending action is to load an example, store which example here
+    #[serde(skip)]
+    pub pending_example: Option<ExampleKind>,
     /// One-shot flag to allow the next close request to proceed after user confirmation (native only)
     #[serde(skip)]
     pub allow_close_on_next_request: bool,
@@ -265,6 +269,7 @@ impl Default for FileState {
             file_operation_receiver: Some(receiver),
             show_unsaved_dialog: false,
             pending_confirm_action: None,
+            pending_example: None,
             allow_close_on_next_request: false,
         }
     }
@@ -304,6 +309,8 @@ pub enum PendingConfirmAction {
     New,
     /// User is attempting to open a file
     Open,
+    /// User is attempting to load a built-in example
+    LoadExample,
     /// User is attempting to quit the application
     Quit,
 }

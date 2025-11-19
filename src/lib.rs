@@ -22,6 +22,7 @@ pub mod simulation;
 pub mod types;
 pub mod ui;
 pub mod constants;
+pub mod examples;
 
 // Re-export public types and functions
 pub use simulation::*;

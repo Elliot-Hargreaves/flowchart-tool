@@ -52,6 +52,7 @@ pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
 use self::editor::{handle_code_textedit_keys, simple_js_format, CodeEditOptions, LanguageKind};
 use self::state::PendingConfirmAction;
+use crate::examples::{all_examples, ExampleKind};
 use crate::types::*;
 use eframe::egui;
 #[cfg(target_arch = "wasm32")]
@@ -143,7 +144,79 @@ impl eframe::App for FlowchartApp {
             self.window_inner_size = Some((size.x, size.y));
         }
 
-        // Top toolbar occupies full width and is independent of the properties panel
+        // Top menu bar
+        egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
+            egui::menu::bar(ui, |ui| {
+                // File menu
+                ui.menu_button("File", |ui| {
+                    if ui.button("New").clicked() {
+                        if self.file.has_unsaved_changes {
+                            self.file.show_unsaved_dialog = true;
+                            self.file.pending_confirm_action = Some(PendingConfirmAction::New);
+                        } else {
+                            self.new_flowchart();
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Load…").clicked() {
+                        if self.file.has_unsaved_changes {
+                            self.file.show_unsaved_dialog = true;
+                            self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
+                        } else {
+                            self.load_flowchart();
+                        }
+                        ui.close_menu();
+                    }
+                    if ui.button("Save").clicked() {
+                        self.save_flowchart();
+                        ui.close_menu();
+                    }
+                    if ui.button("Save As…").clicked() {
+                        self.save_as_flowchart();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.menu_button("Examples", |ui| {
+                        for ex in all_examples() {
+                            if ui.button(ex.name).clicked() {
+                                self.request_load_example(ex.kind);
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                });
+
+                // Edit menu
+                ui.menu_button("Edit", |ui| {
+                    let can_undo = self.undo_history.can_undo();
+                    let can_redo = self.undo_history.can_redo();
+                    ui.add_enabled_ui(can_undo, |ui| {
+                        if ui.button("⟲ Undo").clicked() {
+                            self.perform_undo();
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_enabled_ui(can_redo, |ui| {
+                        if ui.button("⟳ Redo").clicked() {
+                            self.perform_redo();
+                            ui.close_menu();
+                        }
+                    });
+                });
+
+                // View menu
+                ui.menu_button("View", |ui| {
+                    if ui.checkbox(&mut self.canvas.show_grid, "Show Grid").changed() {
+                        ui.close_menu();
+                    }
+                    if ui.checkbox(&mut self.dark_mode, "Dark Mode").changed() {
+                        ui.close_menu();
+                    }
+                });
+            });
+        });
+
+        // Toolbar (simulation/layout) occupies full width below the menubar
         egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
             self.draw_toolbar(ui);
         });
@@ -179,7 +252,8 @@ impl eframe::App for FlowchartApp {
             let title = match self.file.pending_confirm_action {
                 Some(PendingConfirmAction::Quit) => "Unsaved changes — Quit?",
                 Some(PendingConfirmAction::New) => "Unsaved changes — Create New?",
-                Some(PendingConfirmAction::Open) => "Unsaved changes — Open File?",
+                Some(PendingConfirmAction::Open) => "Unsaved changes — Load File?",
+                Some(PendingConfirmAction::LoadExample) => "Unsaved changes — Load Example?",
                 None => "Unsaved changes",
             };
             egui::Window::new(title)
@@ -193,7 +267,8 @@ impl eframe::App for FlowchartApp {
                         let confirm_label = match self.file.pending_confirm_action {
                             Some(PendingConfirmAction::Quit) => "Discard and Quit",
                             Some(PendingConfirmAction::New) => "Discard and Create New",
-                            Some(PendingConfirmAction::Open) => "Discard and Open",
+                            Some(PendingConfirmAction::Open) => "Discard and Load",
+                            Some(PendingConfirmAction::LoadExample) => "Discard and Load Example",
                             None => "Discard",
                         };
                         if ui.button(confirm_label).clicked() {
@@ -203,6 +278,11 @@ impl eframe::App for FlowchartApp {
                                 }
                                 Some(PendingConfirmAction::Open) => {
                                     self.load_flowchart();
+                                }
+                                Some(PendingConfirmAction::LoadExample) => {
+                                    if let Some(kind) = self.file.pending_example.take() {
+                                        self.load_example(kind);
+                                    }
                                 }
                                 Some(PendingConfirmAction::Quit) => {
                                     // Allow one close request to pass without interception
@@ -725,52 +805,13 @@ impl FlowchartApp {
         }
     }
 
-    /// Renders the toolbar with file operations, simulation controls, and view options.
+    /// Renders the toolbar with simulation controls and layout tools.
     ///
     /// # Arguments
     ///
     /// * `ui` - The egui UI context
     fn draw_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            // File operations
-            if ui.button("New").clicked() {
-                if self.file.has_unsaved_changes {
-                    self.file.show_unsaved_dialog = true;
-                    self.file.pending_confirm_action = Some(PendingConfirmAction::New);
-                } else {
-                    self.new_flowchart();
-                }
-            }
-            if ui.button("Open").clicked() {
-                if self.file.has_unsaved_changes {
-                    self.file.show_unsaved_dialog = true;
-                    self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
-                } else {
-                    self.load_flowchart();
-                }
-            }
-            if ui.button("Save").clicked() {
-                self.save_flowchart();
-            }
-            if ui.button("Save As").clicked() {
-                self.save_as_flowchart();
-            }
-
-            ui.separator();
-
-            // Undo/Redo operations
-            ui.add_enabled_ui(self.undo_history.can_undo(), |ui| {
-                if ui.button("⟲ Undo").clicked() {
-                    self.perform_undo();
-                }
-            });
-            ui.add_enabled_ui(self.undo_history.can_redo(), |ui| {
-                if ui.button("⟳ Redo").clicked() {
-                    self.perform_redo();
-                }
-            });
-
-            ui.separator();
 
             // Simulation controls
             if self.is_simulation_running {
@@ -852,13 +893,6 @@ impl FlowchartApp {
                         "Line",
                     );
                 });
-
-            ui.separator();
-
-            // View options
-            ui.checkbox(&mut self.canvas.show_grid, "Show Grid");
-            ui.separator();
-            ui.checkbox(&mut self.dark_mode, "Dark Mode");
 
             ui.separator();
 

@@ -7,6 +7,7 @@ use super::state::{FileOperationResult, FlowchartApp, PendingLoadOperation, Pend
 use crate::types::Flowchart;
 use crate::ui::UndoHistory;
 use eframe::egui;
+use crate::examples::{build_example, all_examples, ExampleKind};
 
 impl FlowchartApp {
     /// Handles pending file operations for both native and WASM platforms.
@@ -19,36 +20,31 @@ impl FlowchartApp {
     /// * `ctx` - The egui context for requesting repaints
     pub fn handle_pending_operations(&mut self, ctx: &egui::Context) {
         // First, process any completed file operations from the channel
+        // Drain any results without holding the receiver borrow while mutating self
+        let mut op_results: Vec<FileOperationResult> = Vec::new();
         if let Some(receiver) = &self.file.file_operation_receiver {
             while let Ok(result) = receiver.try_recv() {
-                match result {
-                    FileOperationResult::SaveCompleted(path) => {
-                        self.file.current_path = Some(path);
-                        self.file.has_unsaved_changes = false;
-                        println!("File saved successfully");
+                op_results.push(result);
+            }
+        }
+        for result in op_results {
+            match result {
+                FileOperationResult::SaveCompleted(path) => {
+                    self.file.current_path = Some(path);
+                    self.file.has_unsaved_changes = false;
+                    println!("File saved successfully");
+                }
+                FileOperationResult::LoadCompleted(path, content) => match Flowchart::from_json(&content) {
+                    Ok(flowchart) => {
+                        self.apply_loaded_flowchart_from_source(flowchart, Some(path));
+                        println!("File loaded successfully");
                     }
-                    FileOperationResult::LoadCompleted(path, content) => {
-                        match Flowchart::from_json(&content) {
-                            Ok(flowchart) => {
-                                self.flowchart = flowchart;
-                                self.file.current_path = Some(path);
-                                self.file.has_unsaved_changes = false;
-                                self.interaction.selected_node = None;
-                                self.interaction.editing_node_name = None;
-                                // Update node counter to avoid ID conflicts
-                                self.node_counter = self.flowchart.nodes.len() as u32;
-                                // Clear undo/redo history when opening a file
-                                self.undo_history = UndoHistory::new();
-                                println!("File loaded successfully");
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to parse flowchart: {}", e);
-                            }
-                        }
+                    Err(e) => {
+                        eprintln!("Failed to parse flowchart: {}", e);
                     }
-                    FileOperationResult::OperationFailed(error) => {
-                        eprintln!("File operation failed: {}", error);
-                    }
+                },
+                FileOperationResult::OperationFailed(error) => {
+                    eprintln!("File operation failed: {}", error);
                 }
             }
         }
@@ -430,5 +426,49 @@ impl FlowchartApp {
         self.node_counter = 0;
         self.canvas.offset = egui::Vec2::ZERO;
         self.canvas.zoom_factor = 1.0;
+    }
+
+    /// Applies a freshly loaded flowchart to the application state, resetting
+    /// related fields consistently for both file loads and example loads.
+    pub fn apply_loaded_flowchart_from_source(
+        &mut self,
+        flowchart: Flowchart,
+        source_path: Option<String>,
+    ) {
+        self.flowchart = flowchart;
+        self.flowchart.current_step = 0;
+        self.file.current_path = source_path;
+        self.file.has_unsaved_changes = false;
+        self.interaction.selected_node = None;
+        self.interaction.editing_node_name = None;
+        self.error_node = None;
+        self.is_simulation_running = false;
+        // Update node counter to avoid ID conflicts
+        self.node_counter = self.flowchart.nodes.len() as u32;
+        // Clear undo/redo history when opening a file/example
+        self.undo_history = UndoHistory::new();
+    }
+
+    /// Loads a built-in example into the editor immediately.
+    pub fn load_example(&mut self, kind: ExampleKind) {
+        let flowchart = build_example(kind);
+        // Determine display name for the example
+        let name = all_examples()
+            .iter()
+            .find(|e| e.kind == kind)
+            .map(|e| e.name)
+            .unwrap_or("Example");
+        self.apply_loaded_flowchart_from_source(flowchart, Some(format!("Example: {}", name)));
+    }
+
+    /// Requests to load an example, showing the unsaved-changes dialog if needed.
+    pub fn request_load_example(&mut self, kind: ExampleKind) {
+        if self.file.has_unsaved_changes {
+            self.file.pending_example = Some(kind);
+            self.file.pending_confirm_action = Some(super::state::PendingConfirmAction::LoadExample);
+            self.file.show_unsaved_dialog = true;
+        } else {
+            self.load_example(kind);
+        }
     }
 }
