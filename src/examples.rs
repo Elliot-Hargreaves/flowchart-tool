@@ -6,6 +6,42 @@
 use crate::types::*;
 use serde_json::json;
 
+/// Recenters all nodes in the given flowchart so that the bounding-box center
+/// of the node positions lies at the world origin (0, 0).
+fn center_flowchart(mut fc: Flowchart) -> Flowchart {
+    if fc.nodes.is_empty() {
+        return fc;
+    }
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for node in fc.nodes.values() {
+        let (x, y) = node.position;
+        if x < min_x { min_x = x; }
+        if x > max_x { max_x = x; }
+        if y < min_y { min_y = y; }
+        if y > max_y { max_y = y; }
+    }
+
+    if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
+        return fc;
+    }
+
+    let cx = (min_x + max_x) * 0.5;
+    let cy = (min_y + max_y) * 0.5;
+
+    // Translate all nodes so that (cx, cy) maps to (0, 0)
+    for node in fc.nodes.values_mut() {
+        node.position.0 -= cx;
+        node.position.1 -= cy;
+    }
+
+    fc
+}
+
 /// Kinds of built-in examples available from the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExampleKind {
@@ -38,7 +74,7 @@ pub const fn all_examples() -> &'static [ExampleInfo] {
         },
         ExampleInfo {
             kind: ExampleKind::EtlPipeline,
-            name: "ETL Pipeline (Extract → Transform → Load)",
+            name: "ETL Pipeline (Extract > Transform > Load)",
         },
     ];
     EXAMPLES
@@ -99,7 +135,7 @@ fn build_basic_linear() -> Flowchart {
     let _ = fc.add_connection(prod_id, trans_id);
     let _ = fc.add_connection(trans_id, cons_id);
 
-    fc
+    center_flowchart(fc)
 }
 
 fn build_decision_branch() -> Flowchart {
@@ -170,7 +206,7 @@ fn build_decision_branch() -> Flowchart {
     let _ = fc.add_connection(branch_id, even_id);
     let _ = fc.add_connection(branch_id, odd_id);
 
-    fc
+    center_flowchart(fc)
 }
 
 fn build_etl_pipeline() -> Flowchart {
@@ -183,7 +219,7 @@ fn build_etl_pipeline() -> Flowchart {
         NodeType::Producer {
             message_template: json!({"record": {"id": 1, "raw": true}}),
             start_step: 0,
-            messages_per_cycle: 1,
+            messages_per_cycle: 6,
             steps_between_cycles: 2,
             messages_produced: 0,
         },
@@ -279,5 +315,5 @@ fn build_etl_pipeline() -> Flowchart {
     let _ = fc.add_connection(load_id, success_id);
     let _ = fc.add_connection(load_id, retry_id);
 
-    fc
+    center_flowchart(fc)
 }
