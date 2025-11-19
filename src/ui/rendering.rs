@@ -95,23 +95,7 @@ impl FlowchartApp {
                         );
                     }
                 }
-                crate::types::GroupDrawingMode::TightPolygon => {
-                    if let Some(world_poly) = self
-                        .group_world_polygon_tight(*gid)
-                        .or_else(|| self.group_world_polygon(*gid))
-                    {
-                        self.draw_rounded_polygon_and_label(
-                            painter,
-                            &world_poly,
-                            fill,
-                            egui::Stroke::new(
-                                crate::constants::GROUP_STROKE_WIDTH,
-                                stroke_color,
-                            ),
-                            &group.name,
-                        );
-                    }
-                }
+                // TightPolygon mode removed; legacy files map to Polygon
             }
         }
 

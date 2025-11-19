@@ -92,19 +92,59 @@ pub struct Group {
 }
 
 /// Drawing mode for a group background shape.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupDrawingMode {
     /// Draw an axis-aligned rounded rectangle around the members' bounding box.
     Rectangle,
     /// Draw a shrink-wrapped polygon (convex hull) around members with padding.
     Polygon,
-    /// Draw a tighter shrink-wrapped polygon (concave hull) around members with padding.
-    TightPolygon,
 }
 
 impl Default for GroupDrawingMode {
     fn default() -> Self {
         GroupDrawingMode::Rectangle
+    }
+}
+
+// --- Custom serde to map legacy values ---
+impl Serialize for GroupDrawingMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let s = match self {
+            GroupDrawingMode::Rectangle => "Rectangle",
+            GroupDrawingMode::Polygon => "Polygon",
+        };
+        serializer.serialize_str(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for GroupDrawingMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ModeVisitor;
+        impl<'de> serde::de::Visitor<'de> for ModeVisitor {
+            type Value = GroupDrawingMode;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a group drawing mode string")
+            }
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match v {
+                    "Rectangle" => Ok(GroupDrawingMode::Rectangle),
+                    "Polygon" => Ok(GroupDrawingMode::Polygon),
+                    // Backward-compat: map removed variant to Polygon
+                    "TightPolygon" | "Tight Polygon" => Ok(GroupDrawingMode::Polygon),
+                    other => Err(E::unknown_variant(other, &["Rectangle", "Polygon"]))
+                }
+            }
+        }
+        deserializer.deserialize_any(ModeVisitor)
     }
 }
 

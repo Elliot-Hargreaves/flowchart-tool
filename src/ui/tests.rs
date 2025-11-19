@@ -324,6 +324,7 @@ fn properties_panel_enters_group_name_edit_and_focuses() {
             id: gid,
             name: "Group 1".into(),
             members: vec![n],
+            drawing: crate::types::GroupDrawingMode::Rectangle,
         },
     );
     app.interaction.selected_group = Some(gid);
@@ -372,7 +373,7 @@ fn rendering_group_label_smoke() {
     let gid = uuid::Uuid::new_v4();
     app.flowchart.groups.insert(
         gid,
-        crate::types::Group { id: gid, name: "My Group".into(), members: vec![n1, n2] },
+        crate::types::Group { id: gid, name: "My Group".into(), members: vec![n1, n2], drawing: crate::types::GroupDrawingMode::Rectangle },
     );
 
     // Render a frame that draws the canvas (and thus the group label); expecting no panic
@@ -414,6 +415,7 @@ fn delete_selected_group_removes_group_only() {
             id: gid,
             name: "G".into(),
             members: vec![n1, n2],
+            drawing: crate::types::GroupDrawingMode::Rectangle,
         },
     );
     app.interaction.selected_group = Some(gid);
@@ -462,7 +464,7 @@ fn undo_redo_group_deletion_roundtrip() {
             NodeType::Consumer { consumption_rate: 1 },
         ));
     let gid = uuid::Uuid::new_v4();
-    let group = crate::types::Group { id: gid, name: "G".into(), members: vec![n1, n2] };
+    let group = crate::types::Group { id: gid, name: "G".into(), members: vec![n1, n2], drawing: crate::types::GroupDrawingMode::Rectangle };
     app.flowchart.groups.insert(gid, group.clone());
     app.interaction.selected_group = Some(gid);
 
@@ -510,7 +512,7 @@ fn delete_key_ignored_while_editing_group_name() {
     let gid = uuid::Uuid::new_v4();
     app.flowchart.groups.insert(
         gid,
-        crate::types::Group { id: gid, name: "Group 1".into(), members: vec![n] },
+        crate::types::Group { id: gid, name: "Group 1".into(), members: vec![n], drawing: crate::types::GroupDrawingMode::Rectangle },
     );
     app.interaction.selected_group = Some(gid);
     app.interaction.editing_group_name = Some(gid);
@@ -2373,20 +2375,16 @@ fn grid_layout_centers_around_pre_layout_center() {
         NodeType::Consumer { consumption_rate: 1 },
     ));
 
-    // Pre-layout bounding-box center
+    // Pre-layout centroid center
     let xs = [-300.0_f32, 100.0, 50.0];
     let ys = [0.0_f32, 200.0, -150.0];
-    let min_x = xs.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let min_y = ys.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max_y = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let pre_cx = (min_x + max_x) * 0.5;
-    let pre_cy = (min_y + max_y) * 0.5;
+    let pre_cx = xs.iter().sum::<f32>() / xs.len() as f32;
+    let pre_cy = ys.iter().sum::<f32>() / ys.len() as f32;
 
     app.interaction.selected_nodes.clear();
     app.grid_layout_selected_or_all();
 
-    // Post-layout centroid should match pre-layout bounding-box center closely
+    // Post-layout centroid should match pre-layout centroid closely
     let positions = [a, b, c].into_iter().map(|id| app.flowchart.nodes.get(&id).unwrap().position).collect::<Vec<_>>();
     let mut post_cx = 0.0;
     let mut post_cy = 0.0;
@@ -2399,6 +2397,82 @@ fn grid_layout_centers_around_pre_layout_center() {
 
     assert!((post_cx - pre_cx).abs() < 1e-4, "x center should be preserved");
     assert!((post_cy - pre_cy).abs() < 1e-4, "y center should be preserved");
+}
+
+#[test]
+fn grid_layout_is_idempotent_for_group_of_three_chain() {
+    // Repro for: 3 nodes (Producer -> Transformer -> Consumer) all inside a selected group
+    // Grid auto-layout should be idempotent when applied multiple times with the group selected.
+    let mut app = FlowchartApp::default();
+    app.node_counter = 1;
+
+    // Create three nodes with scattered positions
+    let prod = app.flowchart.add_node(FlowchartNode::new(
+        "Producer".into(),
+        (-120.0, -80.0),
+        NodeType::Producer {
+            message_template: serde_json::json!({}),
+            start_step: 0,
+            messages_per_cycle: 1,
+            steps_between_cycles: 1,
+            messages_produced: 0,
+        },
+    ));
+    let trans = app.flowchart.add_node(FlowchartNode::new(
+        "Transformer".into(),
+        (60.0, 40.0),
+        NodeType::Transformer {
+            script: "return msg;".into(),
+            selected_outputs: None,
+            globals: Default::default(),
+            initial_globals: Default::default(),
+        },
+    ));
+    let cons = app.flowchart.add_node(FlowchartNode::new(
+        "Consumer".into(),
+        (200.0, -10.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Chain: Producer -> Transformer -> Consumer
+    app.flowchart.connections.push(Connection::new(prod, trans));
+    app.flowchart.connections.push(Connection::new(trans, cons));
+
+    // Create a group containing all three and select the group
+    let gid = uuid::Uuid::new_v4();
+    app.flowchart.groups.insert(
+        gid,
+        crate::types::Group {
+            id: gid,
+            name: "Three Chain".into(),
+            members: vec![prod, trans, cons],
+            drawing: crate::types::GroupDrawingMode::Rectangle,
+        },
+    );
+    app.interaction.selected_group = Some(gid);
+
+    // Apply grid layout twice
+    app.grid_layout_selected_or_all();
+    let pos_after_first = (
+        app.flowchart.nodes.get(&prod).unwrap().position,
+        app.flowchart.nodes.get(&trans).unwrap().position,
+        app.flowchart.nodes.get(&cons).unwrap().position,
+    );
+
+    app.grid_layout_selected_or_all();
+    let pos_after_second = (
+        app.flowchart.nodes.get(&prod).unwrap().position,
+        app.flowchart.nodes.get(&trans).unwrap().position,
+        app.flowchart.nodes.get(&cons).unwrap().position,
+    );
+
+    // Expect identical positions (idempotent)
+    assert!((pos_after_first.0 .0 - pos_after_second.0 .0).abs() < 1e-5);
+    assert!((pos_after_first.0 .1 - pos_after_second.0 .1).abs() < 1e-5);
+    assert!((pos_after_first.1 .0 - pos_after_second.1 .0).abs() < 1e-5);
+    assert!((pos_after_first.1 .1 - pos_after_second.1 .1).abs() < 1e-5);
+    assert!((pos_after_first.2 .0 - pos_after_second.2 .0).abs() < 1e-5);
+    assert!((pos_after_first.2 .1 - pos_after_second.2 .1).abs() < 1e-5);
 }
 
 #[test]
