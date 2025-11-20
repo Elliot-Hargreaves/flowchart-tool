@@ -108,7 +108,7 @@ impl eframe::App for FlowchartApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if ctx.input(|i| i.viewport().close_requested()) {
-                if self.file.has_unsaved_changes && !self.file.allow_close_on_next_request {
+                if self.file.has_unsaved_changes_effective() && !self.file.allow_close_on_next_request {
                     // Abort close and show confirmation dialog
                     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                     if !self.file.show_unsaved_dialog {
@@ -126,7 +126,7 @@ impl eframe::App for FlowchartApp {
         #[cfg(target_arch = "wasm32")]
         {
             // Update browser beforeunload prompt based on unsaved state
-            Self::update_beforeunload(self.file.has_unsaved_changes);
+            Self::update_beforeunload(self.file.has_unsaved_changes_effective());
         }
 
         // Restore native window size once per session (desktop only)
@@ -150,7 +150,7 @@ impl eframe::App for FlowchartApp {
                 // File menu
                 ui.menu_button("File", |ui| {
                     if ui.button("New").clicked() {
-                        if self.file.has_unsaved_changes {
+                        if self.file.has_unsaved_changes_effective() {
                             self.file.show_unsaved_dialog = true;
                             self.file.pending_confirm_action = Some(PendingConfirmAction::New);
                         } else {
@@ -159,7 +159,7 @@ impl eframe::App for FlowchartApp {
                         ui.close_menu();
                     }
                     if ui.button("Load…").clicked() {
-                        if self.file.has_unsaved_changes {
+                        if self.file.has_unsaved_changes_effective() {
                             self.file.show_unsaved_dialog = true;
                             self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
                         } else {
@@ -629,7 +629,7 @@ impl FlowchartApp {
             }
             // Open: Cmd/Ctrl+O
             if i.key_pressed(egui::Key::O) && cmd {
-                if self.file.has_unsaved_changes {
+                if self.file.has_unsaved_changes_effective() {
                     self.file.show_unsaved_dialog = true;
                     self.file.pending_confirm_action = Some(PendingConfirmAction::Open);
                 } else {
@@ -638,7 +638,7 @@ impl FlowchartApp {
             }
             // New: Cmd/Ctrl+N
             if i.key_pressed(egui::Key::N) && cmd {
-                if self.file.has_unsaved_changes {
+                if self.file.has_unsaved_changes_effective() {
                     self.file.show_unsaved_dialog = true;
                     self.file.pending_confirm_action = Some(PendingConfirmAction::New);
                 } else {
@@ -648,7 +648,7 @@ impl FlowchartApp {
             // Quit: Cmd/Ctrl+Q (native only)
             #[cfg(not(target_arch = "wasm32"))]
             if i.key_pressed(egui::Key::Q) && cmd {
-                if self.file.has_unsaved_changes {
+                if self.file.has_unsaved_changes_effective() {
                     self.file.show_unsaved_dialog = true;
                     self.file.pending_confirm_action = Some(PendingConfirmAction::Quit);
                 } else {
@@ -910,12 +910,12 @@ impl FlowchartApp {
                     if self.file.is_example_readonly {
                         label.push_str(" [read-only]");
                     }
-                    if self.file.has_unsaved_changes {
+                    if self.file.has_unsaved_changes_effective() {
                         label.push('*');
                     }
                     ui.label(label);
                 } else {
-                    let status = if self.file.has_unsaved_changes {
+                    let status = if self.file.has_unsaved_changes_effective() {
                         "Untitled*"
                     } else {
                         "Untitled"

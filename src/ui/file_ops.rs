@@ -483,7 +483,7 @@ impl FlowchartApp {
 
     /// Requests to load an example, showing the unsaved-changes dialog if needed.
     pub fn request_load_example(&mut self, kind: ExampleKind) {
-        if self.file.has_unsaved_changes {
+        if self.file.has_unsaved_changes_effective() {
             self.file.pending_example = Some(kind);
             self.file.pending_confirm_action = Some(super::state::PendingConfirmAction::LoadExample);
             self.file.show_unsaved_dialog = true;

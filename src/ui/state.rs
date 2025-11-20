@@ -279,6 +279,17 @@ impl Default for FileState {
     }
 }
 
+impl FileState {
+    /// Returns whether there are user‑meaningful unsaved changes.
+    ///
+    /// While a built‑in example is loaded (`is_example_readonly == true`),
+    /// we intentionally suppress unsaved change detection to avoid prompting
+    /// the user about discarding edits to read‑only examples.
+    pub fn has_unsaved_changes_effective(&self) -> bool {
+        self.has_unsaved_changes && !self.is_example_readonly
+    }
+}
+
 /// Represents a pending save operation type.
 #[derive(Debug)]
 pub enum PendingSaveOperation {
