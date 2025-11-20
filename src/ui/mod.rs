@@ -167,14 +167,18 @@ impl eframe::App for FlowchartApp {
                         }
                         ui.close_menu();
                     }
-                    if ui.button("Save").clicked() {
-                        self.save_flowchart();
-                        ui.close_menu();
-                    }
-                    if ui.button("Save As…").clicked() {
-                        self.save_as_flowchart();
-                        ui.close_menu();
-                    }
+                    ui.add_enabled_ui(!self.file.is_example_readonly, |ui| {
+                        if ui.button("Save").clicked() {
+                            self.save_flowchart();
+                            ui.close_menu();
+                        }
+                    });
+                    ui.add_enabled_ui(!self.file.is_example_readonly, |ui| {
+                        if ui.button("Save As…").clicked() {
+                            self.save_as_flowchart();
+                            ui.close_menu();
+                        }
+                    });
                     ui.separator();
                     ui.menu_button("Examples", |ui| {
                         for ex in all_examples() {
@@ -902,12 +906,14 @@ impl FlowchartApp {
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if let Some(file_path) = &self.file.current_path {
-                    let status = if self.file.has_unsaved_changes {
-                        "*"
-                    } else {
-                        ""
-                    };
-                    ui.label(format!("{}{}", file_path, status));
+                    let mut label = file_path.clone();
+                    if self.file.is_example_readonly {
+                        label.push_str(" [read-only]");
+                    }
+                    if self.file.has_unsaved_changes {
+                        label.push('*');
+                    }
+                    ui.label(label);
                 } else {
                     let status = if self.file.has_unsaved_changes {
                         "Untitled*"

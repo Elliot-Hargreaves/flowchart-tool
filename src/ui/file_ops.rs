@@ -398,11 +398,23 @@ impl FlowchartApp {
 
     /// Opens a file dialog to save the flowchart with a new name.
     pub fn save_as_flowchart(&mut self) {
+        if self.file.is_example_readonly {
+            eprintln!(
+                "Saving is disabled while an example is loaded. Use File → New or File → Load to enable saving."
+            );
+            return;
+        }
         self.file.pending_save_operation = Some(PendingSaveOperation::SaveAs);
     }
 
     /// Saves the flowchart to the current file path, or triggers "Save As" if no path is set.
     pub fn save_flowchart(&mut self) {
+        if self.file.is_example_readonly {
+            eprintln!(
+                "Saving is disabled while an example is loaded. Use File → New or File → Load to enable saving."
+            );
+            return;
+        }
         if self.file.current_path.is_some() {
             self.file.pending_save_operation = Some(PendingSaveOperation::Save);
         } else {
@@ -421,6 +433,7 @@ impl FlowchartApp {
         self.flowchart.current_step = 0;
         self.file.current_path = None;
         self.file.has_unsaved_changes = false;
+        self.file.is_example_readonly = false;
         self.interaction.selected_node = None;
         self.interaction.editing_node_name = None;
         self.node_counter = 0;
@@ -439,6 +452,13 @@ impl FlowchartApp {
         self.flowchart.current_step = 0;
         self.file.current_path = source_path;
         self.file.has_unsaved_changes = false;
+        // Mark as read-only if this came from an example source path
+        self.file.is_example_readonly = self
+            .file
+            .current_path
+            .as_ref()
+            .map(|p| p.starts_with("Example: "))
+            .unwrap_or(false);
         self.interaction.selected_node = None;
         self.interaction.editing_node_name = None;
         self.error_node = None;

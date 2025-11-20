@@ -233,6 +233,9 @@ pub struct FileState {
     /// Flag indicating if the flowchart has unsaved changes
     #[serde(skip)]
     pub has_unsaved_changes: bool,
+    /// When true, saving is disabled because the current flowchart was loaded from a built-in example
+    #[serde(skip)]
+    pub is_example_readonly: bool,
     /// Pending file operations for WASM compatibility
     #[serde(skip)]
     pub pending_save_operation: Option<PendingSaveOperation>,
@@ -263,6 +266,7 @@ impl Default for FileState {
         Self {
             current_path: None,
             has_unsaved_changes: false,
+            is_example_readonly: false,
             pending_save_operation: None,
             pending_load_operation: None,
             file_operation_sender: Some(sender),
