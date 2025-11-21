@@ -298,31 +298,40 @@ impl FlowchartApp {
                     }
                 }
                 GroupDrawingMode::Polygon => {
-                    if let Some(poly) = self.group_world_polygon(*gid) {
-                        let mut d = String::new();
-                        for (i, p) in poly.iter().enumerate() {
-                            let x = map_x(p.x);
-                            let y = map_y(p.y);
-                            if i == 0 {
-                                let _ = write!(d, "M{:.1},{:.1}", x, y);
-                            } else {
-                                let _ = write!(d, " L{:.1},{:.1}", x, y);
-                            }
+                    if let Some(world_poly) = self.group_world_polygon(*gid) {
+                        // Map to SVG pixel space
+                        let mut pts_px: Vec<(f32, f32)> = Vec::with_capacity(world_poly.len());
+                        for p in &world_poly {
+                            pts_px.push((map_x(p.x), map_y(p.y)));
                         }
-                        let _ = write!(d, " Z");
-                        let _ = writeln!(
-                            out,
-                            "<path d=\"{}\" fill=\"#8095ff\" fill-opacity=\"0.12\" stroke=\"#8095ff\" stroke-opacity=\"0.8\" stroke-width=\"1.5\" />",
-                            d
-                        );
+                        // Apply rounded-corner approximation matching canvas
+                        let rounded = round_polygon_points_svg(&pts_px, constants::GROUP_CORNER_RADIUS, 6);
+
+                        // Emit as a polyline path
+                        if rounded.len() >= 3 {
+                            let mut d = String::new();
+                            for (i, (x, y)) in rounded.iter().copied().enumerate() {
+                                if i == 0 {
+                                    let _ = write!(d, "M{:.1},{:.1}", x, y);
+                                } else {
+                                    let _ = write!(d, " L{:.1},{:.1}", x, y);
+                                }
+                            }
+                            let _ = write!(d, " Z");
+                            let _ = writeln!(
+                                out,
+                                "<path d=\"{}\" fill=\"#808080\" fill-opacity=\"0.08\" stroke=\"#808080\" stroke-opacity=\"0.5\" stroke-width=\"1.5\" />",
+                                d
+                            );
+                        }
+
+                        // Label at area-weighted centroid (world), mapped to SVG
                         if !group.name.is_empty() {
-                            // Rough centroid for label
-                            let (mut sx, mut sy) = (0.0, 0.0);
-                            for p in &poly { sx += map_x(p.x); sy += map_y(p.y); }
-                            let n = poly.len().max(1) as f32;
-                            let cx = sx / n;
-                            let cy = sy / n;
-                            let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#444\" dominant-baseline=\"middle\" text-anchor=\"middle\">{}</text>", cx, cy, escape_xml(&group.name));
+                            if let Some((cxw, cyw)) = polygon_centroid_world(&world_poly) {
+                                let cx = map_x(cxw);
+                                let cy = map_y(cyw);
+                                let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#444\" dominant-baseline=\"middle\" text-anchor=\"middle\">{}</text>", cx, cy, escape_xml(&group.name));
+                            }
                         }
                     }
                 }
@@ -562,4 +571,164 @@ fn wrap_text_with_egui(
         lines.push(text.to_string());
     }
     lines
+}
+
+// ===== Helper geometry for export (SVG coordinate space) =====
+
+/// Area-weighted centroid in world space; returns (x, y) or None if degenerate.
+fn polygon_centroid_world(points: &[eframe::egui::Pos2]) -> Option<(f32, f32)> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut a = 0.0f32;
+    let mut cx = 0.0f32;
+    let mut cy = 0.0f32;
+    for i in 0..points.len() {
+        let p = points[i];
+        let q = points[(i + 1) % points.len()];
+        let cross = p.x * q.y - q.x * p.y;
+        a += cross;
+        cx += (p.x + q.x) * cross;
+        cy += (p.y + q.y) * cross;
+    }
+    if a.abs() < 1e-6 {
+        return None;
+    }
+    let inv = 1.0 / (3.0 * a);
+    Some((cx * inv, cy * inv))
+}
+
+/// Rounded-corner approximation of a closed polygon in SVG pixel space.
+/// `points` are (x, y) pixels, Y grows downward like egui's screen space.
+fn round_polygon_points_svg(points: &[(f32, f32)], radius_px: f32, segments_per_corner: usize) -> Vec<(f32, f32)> {
+    let n = points.len();
+    if n < 3 || radius_px <= 0.0 || segments_per_corner == 0 {
+        return points.to_vec();
+    }
+
+    // Shoelace for orientation; in Y-down, visually CCW yields negative area
+    let mut signed_area = 0.0f32;
+    for i in 0..n {
+        let (px, py) = points[i];
+        let (qx, qy) = points[(i + 1) % n];
+        signed_area += px * qy - qx * py;
+    }
+    let ccw = signed_area < 0.0;
+    let segs = segments_per_corner.max(1);
+
+    #[inline]
+    fn perp_left(vx: f32, vy: f32) -> (f32, f32) { (-vy, vx) }
+
+    #[inline]
+    fn normalize(vx: f32, vy: f32) -> (f32, f32) {
+        let len = (vx * vx + vy * vy).sqrt().max(1e-6);
+        (vx / len, vy / len)
+    }
+
+    #[inline]
+    fn project_point_on_line(ax: f32, ay: f32, dx: f32, dy: f32, px: f32, py: f32) -> (f32, f32) {
+        let dir2 = (dx * dx + dy * dy).max(1e-12);
+        let apx = px - ax;
+        let apy = py - ay;
+        let t = (apx * dx + apy * dy) / dir2;
+        (ax + dx * t, ay + dy * t)
+    }
+
+    #[inline]
+    fn intersect_lines(ax: f32, ay: f32, d1x: f32, d1y: f32, bx: f32, by: f32, d2x: f32, d2y: f32) -> Option<(f32, f32)> {
+        let denom = d1x * d2y - d1y * d2x;
+        if denom.abs() < 1e-6 { return None; }
+        let bax = bx - ax;
+        let bay = by - ay;
+        let t = (bax * d2y - bay * d2x) / denom;
+        Some((ax + d1x * t, ay + d1y * t))
+    }
+
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(n * (segs + 1));
+
+    for i in 0..n {
+        let (px, py) = points[(i + n - 1) % n];
+        let (cx, cy) = points[i];
+        let (nx, ny) = points[(i + 1) % n];
+
+        let e1x = cx - px;
+        let e1y = cy - py;
+        let e2x = nx - cx;
+        let e2y = ny - cy;
+        let len1 = (e1x * e1x + e1y * e1y).sqrt().max(1e-6);
+        let len2 = (e2x * e2x + e2y * e2y).sqrt().max(1e-6);
+        let (d1x, d1y) = (e1x / len1, e1y / len1);
+        let (d2x, d2y) = (e2x / len2, e2y / len2);
+
+        // Turn sign; in Y-down, convex test flips based on winding
+        let turn = d1x * d2y - d1y * d2x;
+        let is_convex = if ccw { turn < 0.0 } else { turn > 0.0 };
+
+        let r_max1 = 0.5 * len1;
+        let r_max2 = 0.5 * len2;
+        let r = radius_px.min(r_max1).min(r_max2);
+        if r <= 0.0 {
+            out.push((cx, cy));
+            continue;
+        }
+
+        if !is_convex {
+            out.push((cx, cy));
+            continue;
+        }
+
+        let side = if ccw { 1.0 } else { -1.0 };
+        let (n1x, n1y) = perp_left(d1x, d1y);
+        let (n2x, n2y) = perp_left(d2x, d2y);
+        let (n1x, n1y) = (n1x * side, n1y * side);
+        let (n2x, n2y) = (n2x * side, n2y * side);
+
+        let p1x = cx + n1x * r;
+        let p1y = cy + n1y * r;
+        let p2x = cx + n2x * r;
+        let p2y = cy + n2y * r;
+
+        let center = if let Some((cx2, cy2)) = intersect_lines(p1x, p1y, d1x, d1y, p2x, p2y, d2x, d2y) {
+            (cx2, cy2)
+        } else {
+            out.push((cx, cy));
+            continue;
+        };
+
+        let (t1x, t1y) = project_point_on_line(cx, cy, d1x, d1y, center.0, center.1);
+        let (t2x, t2y) = project_point_on_line(cx, cy, d2x, d2y, center.0, center.1);
+
+        // Clamp tangency distance along edges
+        let clamp = |tx: f32, ty: f32, bx: f32, by: f32, maxd: f32| -> (f32, f32) {
+            let vx = tx - bx;
+            let vy = ty - by;
+            let l = (vx * vx + vy * vy).sqrt();
+            if l > maxd && l > 1e-6 {
+                let f = maxd / l;
+                (bx + vx * f, by + vy * f)
+            } else {
+                (tx, ty)
+            }
+        };
+        let (t1x, t1y) = clamp(t1x, t1y, cx, cy, r_max1);
+        let (t2x, t2y) = clamp(t2x, t2y, cx, cy, r_max2);
+
+        let a1 = (t1y - center.1).atan2(t1x - center.0);
+        let a2 = (t2y - center.1).atan2(t2x - center.0);
+        let mut delta = a2 - a1;
+        while delta <= -std::f32::consts::PI { delta += std::f32::consts::TAU; }
+        while delta > std::f32::consts::PI { delta -= std::f32::consts::TAU; }
+        if delta.abs() < 1e-4 {
+            out.push((t1x, t1y));
+            continue;
+        }
+        let start = a1;
+        for s in 0..=segs {
+            let t = s as f32 / segs as f32;
+            let ang = start + delta * t;
+            // Match egui Y-down orientation as in canvas method
+            out.push((center.0 - ang.cos() * r, center.1 - ang.sin() * r));
+        }
+    }
+    out
 }
