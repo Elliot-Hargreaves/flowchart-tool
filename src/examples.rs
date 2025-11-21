@@ -365,7 +365,7 @@ fn build_socket_client_server() -> Flowchart {
 
     // Router: forwards based on dst field to either Server or Client Handler
     let router_script = r#"function transform(input) {
-    // Forward based on destination; default broadcast if unknown
+    // Forward based on destination; drop if unknown
     const dst = input.dst;
     const out = Object.assign({}, input);
     if (dst === "Server") {
@@ -373,8 +373,8 @@ fn build_socket_client_server() -> Flowchart {
     } else if (dst === "Client") {
         out.__targets = ["Client Handler"];
     } else {
-        // If unknown, broadcast to all connected
-        out.__targets = null;
+        // Unknown destination – drop
+        return null;
     }
     return out;
 }"#
@@ -405,10 +405,11 @@ fn build_socket_client_server() -> Flowchart {
         out.dst = "Client";
         out.data = { ok: true };
     } else if (input.type === "ACK") {
-        // Ignore terminal ACKs at server
-        return { note: "ACK received at server" };
+        // Ignore terminal ACKs at server (drop)
+        return null;
     } else {
-        return { note: "Unknown at server" };
+        // Unknown message type – drop
+        return null;
     }
     // Send back via Router by targeting destination name
     out.__targets = ["Router"];
@@ -444,8 +445,8 @@ fn build_socket_client_server() -> Flowchart {
         out.__targets = ["Client Sink"];
         return out;
     }
-    // Ignore other messages
-    return { note: "Client handler idle" };
+    // Ignore other messages (drop)
+    return null;
 }"#
     .to_string();
     let client_handler = FlowchartNode::new(
@@ -509,7 +510,8 @@ fn build_network_packet_traversal() -> Flowchart {
     } else if (dst.startsWith("C")) {
         out.__targets = ["Switch C"]; // toward subnet C
     } else {
-        return { note: "unknown network at core" };
+        // drop unknown networks
+        return null;
     }
     return out;
 }"#
@@ -534,7 +536,8 @@ fn build_network_packet_traversal() -> Flowchart {
     if (dst.startsWith("A")) {
         if (dst === "A2") { out.__targets = ["A2"]; return out; }
         if (dst === "A3") { out.__targets = ["A3"]; return out; }
-        return { note: "unknown host on subnet A" };
+        // drop unknown hosts on subnet A
+        return null;
     }
     out.__targets = ["Core Switch"]; // off-subnet
     return out;
@@ -559,7 +562,8 @@ fn build_network_packet_traversal() -> Flowchart {
     if (dst.startsWith("B")) {
         if (dst === "B2") { out.__targets = ["B2"]; return out; }
         if (dst === "B3") { out.__targets = ["B3"]; return out; }
-        return { note: "unknown host on subnet B" };
+        // drop unknown hosts on subnet B
+        return null;
     }
     out.__targets = ["Core Switch"]; // off-subnet
     return out;
@@ -585,7 +589,8 @@ fn build_network_packet_traversal() -> Flowchart {
         if (dst === "C1") { out.__targets = ["C1"]; return out; }
         if (dst === "C2") { out.__targets = ["C2"]; return out; }
         if (dst === "C3") { out.__targets = ["C3"]; return out; }
-        return { note: "unknown host on subnet C" };
+        // drop unknown hosts on subnet C
+        return null;
     }
     out.__targets = ["Core Switch"]; // off-subnet
     return out;
@@ -747,4 +752,76 @@ fn build_network_packet_traversal() -> Flowchart {
     fc.groups.insert(core_grp.id, core_grp);
 
     center_flowchart(fc)
+}
+
+#[cfg(test)]
+mod example_quiescence_tests {
+    use super::*;
+    use crate::simulation::SimulationEngine;
+
+    /// Helper: run N simulation cycles, delivering all messages each cycle.
+    fn run_cycles(engine: &mut SimulationEngine, flowchart: &mut Flowchart, cycles: usize) -> Vec<usize> {
+        let mut per_cycle_deliveries = Vec::with_capacity(cycles);
+        for _ in 0..cycles {
+            let deliveries = engine.step(flowchart);
+            let count = deliveries.len();
+            for (node_id, msg) in deliveries {
+                // Ignore individual delivery errors for this helper; surface via panic on Err
+                engine
+                    .deliver_message(node_id, msg, flowchart)
+                    .expect("deliver_message failed");
+            }
+            per_cycle_deliveries.push(count);
+        }
+        per_cycle_deliveries
+    }
+
+    fn assert_quiescent(flowchart: &Flowchart) {
+        // No messages should remain on any connection
+        assert!(flowchart
+            .connections
+            .iter()
+            .all(|c| c.messages.is_empty()), "Expected all connections to be empty");
+    }
+
+    #[test]
+    fn socket_client_server_becomes_quiescent() {
+        let mut engine = SimulationEngine::new();
+        let mut fc = super::build_example(ExampleKind::SocketClientServer);
+
+        // Enough cycles to complete SYN -> SYN-ACK -> ACK+REQUEST -> RESPONSE -> Sink
+        let counts = run_cycles(&mut engine, &mut fc, 14);
+
+        // Expect some activity occurred
+        assert!(counts.iter().sum::<usize>() > 0);
+        // Last few cycles should be idle
+        assert!(counts[counts.len() - 3..].iter().all(|&n| n == 0));
+        assert_quiescent(&fc);
+    }
+
+    #[test]
+    fn etl_pipeline_becomes_quiescent() {
+        let mut engine = SimulationEngine::new();
+        let mut fc = super::build_example(ExampleKind::EtlPipeline);
+
+        // Source produces 6 records every 2 steps; allow enough cycles for full pipeline
+        let counts = run_cycles(&mut engine, &mut fc, 30);
+
+        assert!(counts.iter().sum::<usize>() > 0);
+        assert!(counts[counts.len() - 5..].iter().all(|&n| n == 0));
+        assert_quiescent(&fc);
+    }
+
+    #[test]
+    fn network_packet_traversal_becomes_quiescent() {
+        let mut engine = SimulationEngine::new();
+        let mut fc = super::build_example(ExampleKind::NetworkPacketTraversal);
+
+        // Two one-off producers at steps 0 and 2; allow enough cycles to traverse switches
+        let counts = run_cycles(&mut engine, &mut fc, 20);
+
+        assert!(counts.iter().sum::<usize>() > 0);
+        assert!(counts[counts.len() - 4..].iter().all(|&n| n == 0));
+        assert_quiescent(&fc);
+    }
 }

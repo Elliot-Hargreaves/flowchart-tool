@@ -393,13 +393,27 @@ pub fn execute_transformer_script_with_globals(
         }
     }
 
-    // Create a new message with the transformed data
-    let transformed_message = Message {
-        id: uuid::Uuid::new_v4(),
-        data: result,
-    };
-
-    Ok(vec![transformed_message])
+    // Interpret the script result:
+    // - null => no output messages
+    // - array => one output message per array element
+    // - any other JSON => single output message with that payload
+    match result {
+        serde_json::Value::Null => Ok(Vec::new()),
+        serde_json::Value::Array(arr) => {
+            let msgs = arr
+                .into_iter()
+                .map(|elem| Message {
+                    id: uuid::Uuid::new_v4(),
+                    data: elem,
+                })
+                .collect();
+            Ok(msgs)
+        }
+        other => Ok(vec![Message {
+            id: uuid::Uuid::new_v4(),
+            data: other,
+        }]),
+    }
 }
 
 // Helper functions removed - now handled by the script engine
@@ -513,12 +527,11 @@ mod tests {
         let input = Message::new(json!({}));
         let result = execute_transformer_script(script, &input).unwrap();
 
-        assert_eq!(result.len(), 1);
-        let msg = &result[0];
-
-        // Should have an array in the data field
-        assert!(msg.data.is_array());
-        assert_eq!(msg.data.as_array().unwrap().len(), 3);
+        // Now arrays are treated as multiple output messages
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].data, json!(1));
+        assert_eq!(result[1].data, json!(2));
+        assert_eq!(result[2].data, json!(3));
     }
 
     #[test]
