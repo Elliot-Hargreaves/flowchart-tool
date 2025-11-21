@@ -12,6 +12,68 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+// ===== Export dialog and options types =====
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Svg,
+    Png,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportScope {
+    WholeGraph,
+    SelectionOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionStyle {
+    Straight,
+    Curved,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrappingMode {
+    Simple,
+    CanvasLike,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExportOptions {
+    pub scope: ExportScope,
+    pub include_grid: bool,
+    pub include_background: bool,
+    pub background_color: egui::Color32,
+    pub margin_px: f32,
+    pub connection_style: ConnectionStyle,
+    pub stroke_color: egui::Color32,
+    pub stroke_width: f32,
+    pub text_wrapping: TextWrappingMode,
+    // PNG-only (native):
+    pub png_scale: f32,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            // Per user directive: default is whole graph (explicit opt-in for selection)
+            scope: ExportScope::WholeGraph,
+            include_grid: true,
+            include_background: false,
+            background_color: egui::Color32::WHITE,
+            // Per user directive: 20px margin
+            margin_px: 20.0,
+            // Per user directive: Straight arrows default
+            connection_style: ConnectionStyle::Straight,
+            // Match app connection stroke color (non-selected): DARK_GRAY
+            stroke_color: egui::Color32::DARK_GRAY,
+            stroke_width: 2.0,
+            // Use egui metrics by default for best fidelity
+            text_wrapping: TextWrappingMode::CanvasLike,
+            png_scale: 1.0,
+        }
+    }
+}
+
 /// Available auto‑arrangement modes for laying out nodes
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AutoArrangeMode {
@@ -382,6 +444,15 @@ pub struct FlowchartApp {
     pub auto_arrange_mode: AutoArrangeMode,
     /// Counter for generating default group names
     pub group_counter: u32,
+    /// Export dialog visibility flag (not persisted)
+    #[serde(skip)]
+    pub show_export_dialog: bool,
+    /// Which export format is pending in the dialog (SVG or PNG)
+    #[serde(skip)]
+    pub pending_export_format: Option<ExportFormat>,
+    /// Staged export options (remembered within the session)
+    #[serde(skip)]
+    pub export_options: ExportOptions,
 }
 
 impl Default for FlowchartApp {
@@ -406,6 +477,9 @@ impl Default for FlowchartApp {
             applied_viewport_restore: false,
             auto_arrange_mode: AutoArrangeMode::ForceDirected,
             group_counter: 0,
+            show_export_dialog: false,
+            pending_export_format: None,
+            export_options: ExportOptions::default(),
         }
     }
 }

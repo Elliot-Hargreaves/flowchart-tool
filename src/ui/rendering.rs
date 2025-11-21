@@ -117,6 +117,9 @@ impl FlowchartApp {
             self.draw_node(painter, node);
         }
 
+        // Overlay: draw connection arrowheads above nodes so they are not obscured
+        self.draw_connection_arrows_overlay(painter);
+
         // Draw marquee selection rectangle if active
         if let (Some(start), Some(end)) =
             (self.interaction.marquee_start, self.interaction.marquee_end)
@@ -323,9 +326,6 @@ impl FlowchartApp {
             egui::Stroke::new(line_width, line_color),
         );
 
-        // Draw arrow at the center of the connection
-        self.draw_arrow_at_center(painter, start_pos, end_pos, line_color);
-
         // Draw messages as a grid next to the arrow
         if !connection.messages.is_empty() {
             self.draw_message_grid(painter, start_pos, end_pos, connection.messages.len());
@@ -374,6 +374,40 @@ impl FlowchartApp {
             color,
             egui::Stroke::NONE,
         ));
+    }
+
+    /// Draws all connection arrowheads in an overlay pass so they are not occluded by nodes.
+    ///
+    /// This is called after nodes are rendered to ensure visibility.
+    pub fn draw_connection_arrows_overlay(&self, painter: &egui::Painter) {
+        for (idx, connection) in self.flowchart.connections.iter().enumerate() {
+            // Compute start/end positions in screen space
+            let start_world = self
+                .flowchart
+                .nodes
+                .get(&connection.from)
+                .map(|n| egui::pos2(n.position.0, n.position.1))
+                .unwrap_or_else(|| egui::pos2(0.0, 0.0));
+            let start_pos = self.world_to_screen(start_world);
+
+            let end_world = self
+                .flowchart
+                .nodes
+                .get(&connection.to)
+                .map(|n| egui::pos2(n.position.0, n.position.1))
+                .unwrap_or_else(|| egui::pos2(100.0, 100.0));
+            let end_pos = self.world_to_screen(end_world);
+
+            // Match connection color/width (selected vs normal)
+            let (line_color, _line_width) = if self.interaction.selected_connection == Some(idx) {
+                (egui::Color32::from_rgb(100, 150, 255), 3.0)
+            } else {
+                (egui::Color32::DARK_GRAY, 2.0)
+            };
+
+            // Draw arrow at the center (overlay, above nodes)
+            self.draw_arrow_at_center(painter, start_pos, end_pos, line_color);
+        }
     }
 
     /// Draws a grid of dots representing messages in transit next to the connection arrow.

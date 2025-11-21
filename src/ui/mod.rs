@@ -189,6 +189,42 @@ impl eframe::App for FlowchartApp {
                             }
                         }
                     });
+                    ui.separator();
+                    ui.menu_button("Export", |ui| {
+                        if ui.button("SVG…").clicked() {
+                            // Open export dialog configured for SVG export
+                            self.pending_export_format = Some(crate::ui::state::ExportFormat::Svg);
+                            // Initialize defaults based on current app state
+                            self.export_options.include_grid = self.canvas.show_grid;
+                            self.export_options.background_color = if self.dark_mode {
+                                egui::Color32::from_gray(20)
+                            } else {
+                                egui::Color32::WHITE
+                            };
+                            // Default to whole graph; user can opt-in to selection only in dialog
+                            self.export_options.scope = crate::ui::state::ExportScope::WholeGraph;
+                            // Use the app's default connection color
+                            self.export_options.stroke_color = egui::Color32::DARK_GRAY;
+                            self.show_export_dialog = true;
+                            ui.close();
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            if ui.button("PNG…").clicked() {
+                                self.pending_export_format = Some(crate::ui::state::ExportFormat::Png);
+                                self.export_options.include_grid = self.canvas.show_grid;
+                                self.export_options.background_color = if self.dark_mode {
+                                    egui::Color32::from_gray(20)
+                                } else {
+                                    egui::Color32::WHITE
+                                };
+                                self.export_options.scope = crate::ui::state::ExportScope::WholeGraph;
+                                self.export_options.stroke_color = egui::Color32::DARK_GRAY;
+                                self.show_export_dialog = true;
+                                ui.close();
+                            }
+                        }
+                    });
                 });
 
                 // Edit menu
@@ -225,6 +261,11 @@ impl eframe::App for FlowchartApp {
         egui::TopBottomPanel::top("top_toolbar").show(ctx, |ui| {
             self.draw_toolbar(ui);
         });
+
+        // Export dialog overlay
+        if self.show_export_dialog {
+            self.draw_export_dialog(ctx);
+        }
 
         // Properties panel should only take space from the canvas area below the toolbar
         let viewport_width = ctx.input(|i| i.content_rect().width());
@@ -342,6 +383,164 @@ impl eframe::App for FlowchartApp {
 }
 
 impl FlowchartApp {
+    /// Draws the export options dialog. Opens when `show_export_dialog` is true.
+    fn draw_export_dialog(&mut self, ctx: &egui::Context) {
+        let mut keep_open = true;
+        egui::Window::new("Export")
+            .open(&mut keep_open)
+            .collapsible(false)
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Scope: selection-only checkbox (default is whole graph)
+                let sel_count = self.interaction.selected_nodes.len()
+                    + if self.interaction.selected_node.is_some() { 1 } else { 0 };
+                let mut selection_only = matches!(
+                    self.export_options.scope,
+                    crate::ui::state::ExportScope::SelectionOnly
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut selection_only, "Export selection only")
+                        .changed()
+                    {
+                        self.export_options.scope = if selection_only {
+                            crate::ui::state::ExportScope::SelectionOnly
+                        } else {
+                            crate::ui::state::ExportScope::WholeGraph
+                        };
+                    }
+                    ui.separator();
+                    ui.label(format!("Selected nodes: {}", sel_count));
+                });
+
+                ui.separator();
+
+                // Grid toggle
+                ui.checkbox(&mut self.export_options.include_grid, "Include grid");
+
+                // Background toggle + color
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.export_options.include_background, "Include background");
+                    let mut color = self.export_options.background_color;
+                    let resp = ui.color_edit_button_srgba(&mut color);
+                    if resp.changed() {
+                        self.export_options.background_color = color;
+                    }
+                });
+
+                // Margin
+                ui.add(egui::Slider::new(&mut self.export_options.margin_px, 0.0..=200.0).text("Margin (px)"));
+
+                ui.separator();
+
+                // Connection style
+                ui.horizontal(|ui| {
+                    ui.label("Connection style:");
+                    ui.radio_value(
+                        &mut self.export_options.connection_style,
+                        crate::ui::state::ConnectionStyle::Straight,
+                        "Straight",
+                    );
+                    ui.radio_value(
+                        &mut self.export_options.connection_style,
+                        crate::ui::state::ConnectionStyle::Curved,
+                        "Curved",
+                    );
+                });
+
+                // Stroke color + width (match app default by default)
+                ui.horizontal(|ui| {
+                    ui.label("Stroke:");
+                    let mut sc = self.export_options.stroke_color;
+                    if ui.color_edit_button_srgba(&mut sc).changed() {
+                        self.export_options.stroke_color = sc;
+                    }
+                    ui.add(egui::Slider::new(&mut self.export_options.stroke_width, 1.0..=6.0).text("Width"));
+                });
+
+                // Text wrapping
+                ui.horizontal(|ui| {
+                    ui.label("Text wrapping:");
+                    ui.radio_value(
+                        &mut self.export_options.text_wrapping,
+                        crate::ui::state::TextWrappingMode::CanvasLike,
+                        "Canvas-like",
+                    );
+                    ui.radio_value(
+                        &mut self.export_options.text_wrapping,
+                        crate::ui::state::TextWrappingMode::Simple,
+                        "Simple",
+                    );
+                });
+
+                // PNG scale (native only)
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.add(egui::Slider::new(&mut self.export_options.png_scale, 0.25..=4.0).text("PNG scale"));
+                }
+
+                ui.separator();
+
+                // Buttons
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Cancel").clicked() {
+                        self.show_export_dialog = false;
+                        self.pending_export_format = None;
+                        return;
+                    }
+
+                    // Disable export when selection-only requested but empty selection
+                    let selection_empty = matches!(
+                        self.export_options.scope,
+                        crate::ui::state::ExportScope::SelectionOnly
+                    ) && sel_count == 0;
+
+                    // Take a copy of options to avoid aliasing borrow when calling export fns
+                    let options_copy = self.export_options;
+
+                    match self.pending_export_format {
+                        Some(crate::ui::state::ExportFormat::Svg) => {
+                            ui.add_enabled_ui(!selection_empty, |ui| {
+                                if ui.button("Export SVG").clicked() {
+                                    self.export_svg_with_options(ctx, &options_copy);
+                                    self.show_export_dialog = false;
+                                    self.pending_export_format = None;
+                                }
+                            });
+                        }
+                        Some(crate::ui::state::ExportFormat::Png) => {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                ui.add_enabled_ui(!selection_empty, |ui| {
+                                    if ui.button("Export PNG").clicked() {
+                                        self.export_png_with_options(ctx, &options_copy);
+                                        self.show_export_dialog = false;
+                                        self.pending_export_format = None;
+                                    }
+                                });
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                ui.add_enabled_ui(false, |ui| {
+                                    ui.button("Export PNG");
+                                });
+                            }
+                        }
+                        None => {
+                            // shouldn't happen; just show a disabled button
+                            ui.add_enabled_ui(false, |ui| {
+                                ui.button("Export");
+                            });
+                        }
+                    }
+                });
+            });
+
+        if !keep_open {
+            self.show_export_dialog = false;
+            self.pending_export_format = None;
+        }
+    }
     /// Handle keyboard shortcuts related to groups (Ctrl/Cmd+G to group selected nodes)
     fn handle_group_shortcuts(&mut self, ctx: &egui::Context) {
         // Avoid interfering while editing text fields
@@ -903,19 +1102,6 @@ impl FlowchartApp {
 
             // Show current simulation step
             ui.label(format!("Step: {}", self.flowchart.current_step));
-
-            ui.separator();
-
-            // Export buttons
-            if ui.button("Export SVG").clicked() {
-                self.export_svg();
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if ui.button("Export PNG").clicked() {
-                    self.export_png();
-                }
-            }
 
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
