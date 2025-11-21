@@ -1559,6 +1559,134 @@ fn click_near_connection_selects_it() {
 }
 
 #[test]
+fn bidirectional_connections_cycle_on_repeated_clicks() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Two nodes
+    let a_id = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (200.0, 200.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b_id = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (400.0, 220.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Add two connections A->B and B->A (same geometry, overlapping)
+    let _ = app.flowchart.add_connection(a_id, b_id);
+    let _ = app.flowchart.add_connection(b_id, a_id);
+
+    let mid = egui::pos2((200.0 + 400.0) * 0.5, (200.0 + 220.0) * 0.5);
+    let dir = egui::vec2(400.0 - 200.0, 220.0 - 200.0).normalized();
+    let normal = egui::vec2(-dir.y, dir.x);
+    let near_point = mid + normal * 5.0; // within CLICK_THRESHOLD
+
+    let ctx = egui::Context::default();
+
+    // First click selects the first connection (index 0)
+    for events in [
+        vec![egui::Event::PointerMoved(near_point)],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+    assert_eq!(app.interaction.selected_connection, Some(0), "first click should select first overlapping connection");
+
+    // Second click at the same point should cycle to the second connection (index 1)
+    for events in [
+        vec![egui::Event::PointerMoved(near_point)],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+    assert_eq!(app.interaction.selected_connection, Some(1), "second click should cycle to the next overlapping connection");
+
+    // Third click cycles back to the first
+    for events in [
+        vec![egui::Event::PointerMoved(near_point)],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+    assert_eq!(app.interaction.selected_connection, Some(0), "third click should wrap around to first connection");
+}
+
+#[test]
+fn repeated_click_with_single_connection_keeps_selection() {
+    let mut app = FlowchartApp::default();
+
+    app.node_counter = 1;
+    app.canvas.offset = egui::Vec2::ZERO;
+    app.canvas.zoom_factor = 1.0;
+
+    // Two nodes
+    let a_id = app.flowchart.add_node(FlowchartNode::new(
+        "A".into(),
+        (200.0, 200.0),
+        NodeType::Producer { message_template: serde_json::json!({}), start_step: 0, messages_per_cycle: 1, steps_between_cycles: 1, messages_produced: 0 },
+    ));
+    let b_id = app.flowchart.add_node(FlowchartNode::new(
+        "B".into(),
+        (400.0, 220.0),
+        NodeType::Consumer { consumption_rate: 1 },
+    ));
+
+    // Single connection
+    let _ = app.flowchart.add_connection(a_id, b_id);
+
+    let mid = egui::pos2((200.0 + 400.0) * 0.5, (200.0 + 220.0) * 0.5);
+    let dir = egui::vec2(400.0 - 200.0, 220.0 - 200.0).normalized();
+    let normal = egui::vec2(-dir.y, dir.x);
+    let near_point = mid + normal * 5.0;
+
+    let ctx = egui::Context::default();
+
+    // First click selects the only connection (index 0)
+    for events in [
+        vec![egui::Event::PointerMoved(near_point)],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+    assert_eq!(app.interaction.selected_connection, Some(0));
+
+    // Second click should keep the same connection selected since no other hits
+    for events in [
+        vec![egui::Event::PointerMoved(near_point)],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+        vec![egui::Event::PointerButton { pos: near_point, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+    ] {
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        raw.events = events;
+        let _ = ctx.run(raw, |ctx| { ctx.set_visuals(egui::Visuals::dark()); egui::CentralPanel::default().show(ctx, |ui| app.draw_canvas(ui)); });
+    }
+    assert_eq!(app.interaction.selected_connection, Some(0), "should keep existing selection when there are no other entities to cycle to");
+}
+
+#[test]
 fn shift_snap_drag_snaps_to_grid() {
     let mut app = FlowchartApp::default();
 

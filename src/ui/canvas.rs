@@ -465,8 +465,17 @@ impl FlowchartApp {
     ///
     /// The index of the connection in the connections vector, or `None` if no connection is there
     pub fn find_connection_at_position(&self, pos: egui::Pos2) -> Option<usize> {
-        let click_threshold = crate::constants::CLICK_THRESHOLD; // pixels in world space
+        self.find_connections_at_position(pos).into_iter().next()
+    }
 
+    /// Finds all connections at the given world position, if any.
+    ///
+    /// Returns a list of indices into the connections vector that are within the
+    /// click threshold from the given point. The order is the same as the
+    /// rendering order (increasing index).
+    pub fn find_connections_at_position(&self, pos: egui::Pos2) -> Vec<usize> {
+        let click_threshold = crate::constants::CLICK_THRESHOLD; // pixels in world space
+        let mut hits: Vec<usize> = Vec::new();
         for (idx, connection) in self.flowchart.connections.iter().enumerate() {
             if let (Some(from_node), Some(to_node)) = (
                 self.flowchart.nodes.get(&connection.from),
@@ -474,17 +483,13 @@ impl FlowchartApp {
             ) {
                 let start = egui::pos2(from_node.position.0, from_node.position.1);
                 let end = egui::pos2(to_node.position.0, to_node.position.1);
-
-                // Calculate distance from point to line segment
                 let distance = self.point_to_line_distance(pos, start, end);
-
                 if distance < click_threshold {
-                    return Some(idx);
+                    hits.push(idx);
                 }
             }
         }
-
-        None
+        hits
     }
 
     /// Calculates the distance from a point to a line segment.

@@ -2229,8 +2229,60 @@ impl FlowchartApp {
             if let Some(pos) = response.interact_pointer_pos() {
                 let world_pos = self.screen_to_world(pos);
 
-                // First try to select a node
-                if let Some(node_id) = self.find_node_at_position(world_pos) {
+                // Gather hits under cursor
+                let node_hit = self.find_node_at_position(world_pos);
+                let conn_hits = self.find_connections_at_position(world_pos);
+
+                // If a connection is currently selected and it's part of the hits at this
+                // cursor location, cycle selection among all entities under cursor. If there
+                // are no alternative entities, keep the existing connection selected.
+                if let Some(current_conn) = self.interaction.selected_connection {
+                    if conn_hits.iter().any(|&i| i == current_conn) {
+                        // Build ordered hit list (node first, then connections in draw order)
+                        enum Hit { Node(NodeId), Connection(usize) }
+                        let mut hits: Vec<Hit> = Vec::new();
+                        if let Some(nid) = node_hit {
+                            hits.push(Hit::Node(nid));
+                        }
+                        for idx in &conn_hits {
+                            hits.push(Hit::Connection(*idx));
+                        }
+
+                        if hits.len() > 1 {
+                            // Find current index within hits; it must be a connection hit
+                            let mut cur_index = None;
+                            for (k, h) in hits.iter().enumerate() {
+                                if let Hit::Connection(idx) = h { if *idx == current_conn { cur_index = Some(k); break; } }
+                            }
+                            let next_index = cur_index.map(|ci| (ci + 1) % hits.len()).unwrap_or(0);
+                            match hits[next_index] {
+                                Hit::Node(nid) => {
+                                    self.interaction.selected_node = Some(nid);
+                                    self.interaction.selected_nodes.clear();
+                                    self.interaction.selected_nodes.push(nid);
+                                    self.interaction.selected_connection = None;
+                                    self.interaction.selected_group = None;
+                                }
+                                Hit::Connection(ci) => {
+                                    self.interaction.selected_connection = Some(ci);
+                                    self.interaction.selected_node = None;
+                                    self.interaction.selected_nodes.clear();
+                                    self.interaction.selected_group = None;
+                                }
+                            }
+                            self.interaction.editing_node_name = None;
+                            self.clear_temp_editing_values();
+                            return;
+                        } else {
+                            // Nothing else to select; keep the current connection selected
+                            // and do not change selection state.
+                            return;
+                        }
+                    }
+                }
+
+                // First try to select a node (default preference)
+                if let Some(node_id) = node_hit {
                     let shift = ui.input(|i| i.modifiers.shift);
                     if shift {
                         // Toggle selection membership on Shift-click
@@ -2261,8 +2313,8 @@ impl FlowchartApp {
                     // Clear temp producer values to reload from selected node
                     self.clear_temp_editing_values();
                 } else {
-                    // Try to select a connection
-                    if let Some(conn_idx) = self.find_connection_at_position(world_pos) {
+                    // Try to select a connection (first hit in draw order)
+                    if let Some(conn_idx) = conn_hits.into_iter().next() {
                         self.interaction.selected_connection = Some(conn_idx);
                         self.interaction.selected_node = None;
                         self.interaction.selected_nodes.clear();
