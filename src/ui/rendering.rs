@@ -142,7 +142,10 @@ impl FlowchartApp {
             return;
         }
         // Transform to screen space
-        let mut screen_pts: Vec<egui::Pos2> = world_poly.iter().map(|p| self.world_to_screen(*p)).collect();
+        let screen_pts: Vec<egui::Pos2> = world_poly
+            .iter()
+            .map(|p| self.world_to_screen(*p))
+            .collect();
 
         // Corner rounding radius in screen pixels
         let radius = crate::constants::GROUP_CORNER_RADIUS;
@@ -162,7 +165,7 @@ impl FlowchartApp {
             r.center()
         });
         let label_pos = self.world_to_screen(centroid_world);
-        let mut text = if name.is_empty() { "Unnamed Group" } else { name };
+        let text = if name.is_empty() { "Unnamed Group" } else { name };
         let text_color = if self.dark_mode {
             egui::Color32::from_gray(220)
         } else {
@@ -601,7 +604,9 @@ impl FlowchartApp {
         let wrapped_text = self.wrap_text(&node.name, max_width, &font_id, painter);
 
         // Calculate text positioning for vertical centering
-        let line_height = painter.fonts(|f| f.row_height(&font_id));
+        let line_height = painter
+            .ctx()
+            .fonts_mut(|f| f.row_height(&font_id));
         let total_height = line_height * wrapped_text.len() as f32;
         let start_y = text_rect.center().y - total_height / 2.0;
 
@@ -656,11 +661,17 @@ impl FlowchartApp {
                 format!("{} {}", current_line, word)
             };
 
-            let text_width = painter.fonts(|f| {
-                f.layout_no_wrap(test_line.clone(), font_id.clone(), egui::Color32::BLACK)
+            let text_width = painter
+                .ctx()
+                .fonts_mut(|f| {
+                    f.layout_no_wrap(
+                        test_line.clone(),
+                        font_id.clone(),
+                        egui::Color32::BLACK,
+                    )
                     .size()
                     .x
-            });
+                });
 
             if text_width <= max_width {
                 current_line = test_line;
@@ -886,7 +897,7 @@ pub fn create_js_layouter(
         let mut layout_job =
             highlighters::highlight_javascript(temp_script, font_id, ui.visuals().dark_mode);
         layout_job.wrap.max_width = wrap_width;
-        ui.fonts(|f| f.layout_job(layout_job))
+        ui.fonts_mut(|f| f.layout_job(layout_job))
     }
 }
 
@@ -907,6 +918,6 @@ pub fn create_json_layouter(
         let mut layout_job =
             highlighters::highlight_json(temp_json, font_id, ui.visuals().dark_mode);
         layout_job.wrap.max_width = wrap_width;
-        ui.fonts(|f| f.layout_job(layout_job))
+        ui.fonts_mut(|f| f.layout_job(layout_job))
     }
 }

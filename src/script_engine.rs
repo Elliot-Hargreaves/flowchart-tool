@@ -22,7 +22,7 @@ use boa_engine::{
     js_string, object::builtins::JsArray, property::PropertyKey, Context, JsObject, JsResult,
     JsString, JsValue, Source,
 };
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// JavaScript script execution engine that works on all platforms
 pub struct JavaScriptEngine {

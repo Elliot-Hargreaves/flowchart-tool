@@ -52,7 +52,7 @@ pub use undo::{UndoAction, UndoHistory, UndoableFlowchart};
 
 use self::editor::{handle_code_textedit_keys, simple_js_format, CodeEditOptions, LanguageKind};
 use self::state::PendingConfirmAction;
-use crate::examples::{all_examples, ExampleKind};
+use crate::examples::all_examples;
 use crate::types::*;
 use eframe::egui;
 #[cfg(target_arch = "wasm32")]
@@ -140,13 +140,13 @@ impl eframe::App for FlowchartApp {
                 self.applied_viewport_restore = true;
             }
             // Capture current window inner size to persist on save
-            let size = ctx.input(|i| i.screen_rect().size());
+            let size = ctx.input(|i| i.content_rect().size());
             self.window_inner_size = Some((size.x, size.y));
         }
 
         // Top menu bar
         egui::TopBottomPanel::top("top_menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 // File menu
                 ui.menu_button("File", |ui| {
                     if ui.button("New").clicked() {
@@ -156,7 +156,7 @@ impl eframe::App for FlowchartApp {
                         } else {
                             self.new_flowchart();
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Load…").clicked() {
                         if self.file.has_unsaved_changes_effective() {
@@ -165,18 +165,18 @@ impl eframe::App for FlowchartApp {
                         } else {
                             self.load_flowchart();
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.add_enabled_ui(!self.file.is_example_readonly, |ui| {
                         if ui.button("Save").clicked() {
                             self.save_flowchart();
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.add_enabled_ui(!self.file.is_example_readonly, |ui| {
                         if ui.button("Save As…").clicked() {
                             self.save_as_flowchart();
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.separator();
@@ -184,7 +184,7 @@ impl eframe::App for FlowchartApp {
                         for ex in all_examples() {
                             if ui.button(ex.name).clicked() {
                                 self.request_load_example(ex.kind);
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });
@@ -197,13 +197,13 @@ impl eframe::App for FlowchartApp {
                     ui.add_enabled_ui(can_undo, |ui| {
                         if ui.button("⟲ Undo").clicked() {
                             self.perform_undo();
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                     ui.add_enabled_ui(can_redo, |ui| {
                         if ui.button("⟳ Redo").clicked() {
                             self.perform_redo();
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 });
@@ -211,10 +211,10 @@ impl eframe::App for FlowchartApp {
                 // View menu
                 ui.menu_button("View", |ui| {
                     if ui.checkbox(&mut self.canvas.show_grid, "Show Grid").changed() {
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.checkbox(&mut self.dark_mode, "Dark Mode").changed() {
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });
@@ -226,7 +226,7 @@ impl eframe::App for FlowchartApp {
         });
 
         // Properties panel should only take space from the canvas area below the toolbar
-        let viewport_width = ctx.input(|i| i.screen_rect().width());
+        let viewport_width = ctx.input(|i| i.content_rect().width());
         // Use remembered width when available, but clamp to viewport
         let clamped_width = self
             .properties_panel_width
@@ -874,7 +874,7 @@ impl FlowchartApp {
             if ui.button("Auto Layout").clicked() {
                 self.apply_auto_arrangement();
             }
-            egui::ComboBox::from_id_source("auto_arrange_mode_combo")
+            egui::ComboBox::from_id_salt("auto_arrange_mode_combo")
                 .selected_text(match self.auto_arrange_mode {
                     crate::ui::state::AutoArrangeMode::ForceDirected => "Force-directed",
                     crate::ui::state::AutoArrangeMode::Grid => "Grid",
@@ -1008,7 +1008,7 @@ impl FlowchartApp {
                     // Drawing mode selector
                     ui.label("Drawing mode:");
                     let mut drawing = group.drawing;
-                    egui::ComboBox::from_id_source("group_drawing_mode")
+                    egui::ComboBox::from_id_salt("group_drawing_mode")
                         .selected_text(match drawing {
                             crate::types::GroupDrawingMode::Rectangle => "Rectangle",
                             crate::types::GroupDrawingMode::Polygon => "Polygon",
