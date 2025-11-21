@@ -294,7 +294,7 @@ impl FlowchartApp {
                         let pad = constants::GROUP_LABEL_PADDING_BASE;
                         let tx = x + pad;
                         let ty = y + h - pad;
-                        let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" fill=\"#444\" dominant-baseline=\"ideographic\">{}</text>", tx, ty, escape_xml(label));
+                        let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#444\" dominant-baseline=\"ideographic\">{}</text>", tx, ty, escape_xml(label));
                     }
                 }
                 GroupDrawingMode::Polygon => {
@@ -322,7 +322,7 @@ impl FlowchartApp {
                             let n = poly.len().max(1) as f32;
                             let cx = sx / n;
                             let cy = sy / n;
-                            let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" fill=\"#444\" dominant-baseline=\"middle\" text-anchor=\"middle\">{}</text>", cx, cy, escape_xml(&group.name));
+                            let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#444\" dominant-baseline=\"middle\" text-anchor=\"middle\">{}</text>", cx, cy, escape_xml(&group.name));
                         }
                     }
                 }
@@ -464,7 +464,7 @@ impl FlowchartApp {
                 TextWrappingMode::Simple => {
                     let _ = writeln!(
                         out,
-                        "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{}\" fill=\"#000\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>",
+                        "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{}\" font-family=\"sans-serif\" fill=\"#000\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>",
                         cx,
                         cy,
                         base_font_size,
@@ -480,7 +480,7 @@ impl FlowchartApp {
                     let lines = wrap_text_with_egui(ctx, &label, max_w, &font_id);
                     let total_h = line_height * lines.len() as f32;
                     let start_y = cy - total_h / 2.0 + line_height * 0.5; // center baseline per line
-                    let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{}\" fill=\"#000\" text-anchor=\"middle\" >", cx, start_y, base_font_size);
+                    let _ = writeln!(out, "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"{}\" font-family=\"sans-serif\" fill=\"#000\" text-anchor=\"middle\" >", cx, start_y, base_font_size);
                     for (i, line) in lines.iter().enumerate() {
                         if i == 0 {
                             let _ = writeln!(out, "  <tspan x=\"{:.1}\" dy=\"0\">{}</tspan>", cx, line);

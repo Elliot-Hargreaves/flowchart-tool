@@ -473,10 +473,12 @@ impl FlowchartApp {
                     );
                 });
 
-                // PNG scale (native only)
+                // PNG-only option: scale factor (native only)
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    ui.add(egui::Slider::new(&mut self.export_options.png_scale, 0.25..=4.0).text("PNG scale"));
+                    if self.pending_export_format == Some(crate::ui::state::ExportFormat::Png) {
+                        ui.add(egui::Slider::new(&mut self.export_options.png_scale, 0.25..=4.0).text("PNG scale"));
+                    }
                 }
 
                 ui.separator();
