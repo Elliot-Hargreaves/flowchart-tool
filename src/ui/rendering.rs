@@ -105,6 +105,9 @@ impl FlowchartApp {
             self.draw_connection(painter, connection, is_selected);
         }
 
+        // Draw connection arrowheads at the same layer as the connection lines (below nodes)
+        self.draw_connection_arrows_overlay(painter);
+
         // Draw connection preview if currently drawing
         if let Some(from_node_id) = self.interaction.drawing_connection_from {
             if let Some(draw_pos) = self.interaction.connection_draw_pos {
@@ -112,13 +115,10 @@ impl FlowchartApp {
             }
         }
 
-        // Draw nodes on top
+        // Draw nodes on top (above connections and their arrowheads)
         for node in self.flowchart.nodes.values() {
             self.draw_node(painter, node);
         }
-
-        // Overlay: draw connection arrowheads above nodes so they are not obscured
-        self.draw_connection_arrows_overlay(painter);
 
         // Draw marquee selection rectangle if active
         if let (Some(start), Some(end)) =

@@ -338,14 +338,12 @@ impl FlowchartApp {
             }
         }
 
-        // Connections: draw lines/paths only (no marker-end). Arrowheads are drawn later above nodes.
+        // Connections: draw lines/paths and arrowheads together (no marker-end), below nodes.
         let _ = writeln!(
             out,
             "<g stroke=\"#{:02x}{:02x}{:02x}\" stroke-width=\"{:.1}\" fill=\"none\"> ",
             sc.r(), sc.g(), sc.b(), options.stroke_width
         );
-        // Collect arrow polygons to render after nodes to avoid occlusion
-        let mut arrow_polys: Vec<String> = Vec::new();
         for conn in &self.flowchart.connections {
             if !included_node_ids.is_empty() {
                 if !(included_node_ids.contains(&conn.from) && included_node_ids.contains(&conn.to)) {
@@ -384,10 +382,11 @@ impl FlowchartApp {
                         let lefty = cy - uy * arrow_len + py * arrow_half_w;
                         let rightx = cx - ux * arrow_len - px * arrow_half_w;
                         let righty = cy - uy * arrow_len - py * arrow_half_w;
-                        arrow_polys.push(format!(
+                        let _ = writeln!(
+                            out,
                             "  <polygon points=\"{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}\" fill=\"#{:02x}{:02x}{:02x}\" />",
                             tipx, tipy, leftx, lefty, rightx, righty, sc.r(), sc.g(), sc.b()
-                        ));
+                        );
                     }
                     ConnectionStyle::Curved => {
                         // Simple cubic bezier with perpendicular offset
@@ -436,10 +435,11 @@ impl FlowchartApp {
                         let lefty = by - uy * arrow_len + py * arrow_half_w;
                         let rightx = bx - ux * arrow_len - px * arrow_half_w;
                         let righty = by - uy * arrow_len - py * arrow_half_w;
-                        arrow_polys.push(format!(
+                        let _ = writeln!(
+                            out,
                             "  <polygon points=\"{:.1},{:.1} {:.1},{:.1} {:.1},{:.1}\" fill=\"#{:02x}{:02x}{:02x}\" />",
                             tipx, tipy, leftx, lefty, rightx, righty, sc.r(), sc.g(), sc.b()
-                        ));
+                        );
                     }
                 }
             }
@@ -502,12 +502,7 @@ impl FlowchartApp {
             }
         }
 
-        // Arrowheads overlay: draw after nodes so they are not obscured by node rectangles
-        let _ = writeln!(out, "<g>");
-        for poly in arrow_polys {
-            let _ = writeln!(out, "{}", poly);
-        }
-        let _ = writeln!(out, "</g>");
+        // Arrowheads are already drawn with connections above; nothing else to add here.
 
         // Close SVG
         let _ = writeln!(out, "</svg>");
