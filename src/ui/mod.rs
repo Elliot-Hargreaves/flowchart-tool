@@ -2002,9 +2002,39 @@ impl FlowchartApp {
     fn draw_no_selection_info(&self, ui: &mut egui::Ui) {
         ui.label("No node selected");
         ui.separator();
-        ui.label("Left-click on a node to select it");
-        ui.label("Right-click on canvas to create nodes");
-        ui.label("Middle-click and drag to pan");
+
+        // Selection basics
+        ui.label("Selection:");
+        ui.label(" - Left-click a node to select it");
+        ui.label(" - Shift+Click a node to toggle its selection");
+        ui.label(" - Drag on empty canvas to marquee-select (hold Shift to add)");
+        ui.label(" - Click empty space to clear selection");
+
+        ui.separator();
+        // Node movement and connections
+        ui.label("Nodes & connections:");
+        ui.label(" - Drag a node to move it (hold Shift to snap to grid)");
+        ui.label(" - Shift+Drag from a node to create a connection");
+
+        ui.separator();
+        // Canvas navigation and context menu
+        ui.label("Canvas:");
+        ui.label(" - Right-click to open the menu and create nodes");
+        ui.label(" - Middle-drag or Cmd (macOS) / Ctrl (Win/Linux) + Left-drag to pan");
+        ui.label(" - Scroll wheel to zoom");
+
+        ui.separator();
+        // Grouping and edits
+        ui.label("Editing:");
+        ui.label(" - Cmd/Ctrl+G to group selected node(s)");
+        ui.label(" - Delete removes the selected node(s), connection, or group");
+        ui.label(" - Undo/Redo: Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z or Cmd/Ctrl+Y");
+
+        ui.separator();
+        // File shortcuts
+        ui.label("File:");
+        ui.label(" - Cmd/Ctrl+S Save, Cmd/Ctrl+Shift+S Save As");
+        ui.label(" - Cmd/Ctrl+O Open, Cmd/Ctrl+N New");
     }
 
     /// Renders the right-click context menu for creating nodes.
