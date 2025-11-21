@@ -23,6 +23,10 @@ getrandom2 = { version = "0.2.16", package = "getrandom", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = {  version = "1" , features = ["rt", "macros", "rt-multi-thread"]}
+resvg = "0.44"
+usvg = "0.44"
+tiny-skia = "0.11"
+fontdb = "0.22"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

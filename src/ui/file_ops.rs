@@ -227,7 +227,7 @@ impl FlowchartApp {
     ///
     /// `Ok(())` if successful, or an error message if the operation fails.
     #[cfg(target_arch = "wasm32")]
-    fn trigger_download(filename: &str, content: &str) -> Result<(), String> {
+    pub(crate) fn trigger_download(filename: &str, content: &str) -> Result<(), String> {
         use crate::wasm_bindgen::JsCast;
 
         let window = web_sys::window().ok_or("No window found")?;
@@ -238,7 +238,15 @@ impl FlowchartApp {
         blob_parts.push(&crate::wasm_bindgen::JsValue::from_str(content));
 
         let blob_options = web_sys::BlobPropertyBag::new();
-        blob_options.set_type("application/json");
+        // Set content type based on file extension for better browser handling
+        let content_type = if filename.ends_with(".svg") {
+            "image/svg+xml"
+        } else if filename.ends_with(".json") {
+            "application/json"
+        } else {
+            "application/octet-stream"
+        };
+        blob_options.set_type(content_type);
 
         let blob = web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_options)
             .map_err(|_| "Failed to create blob")?;

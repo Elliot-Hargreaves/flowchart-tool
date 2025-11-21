@@ -16,6 +16,7 @@ mod editor;
 mod file_ops;
 mod highlighters;
 mod rendering;
+mod export;
 mod state;
 mod undo;
 
@@ -902,6 +903,19 @@ impl FlowchartApp {
 
             // Show current simulation step
             ui.label(format!("Step: {}", self.flowchart.current_step));
+
+            ui.separator();
+
+            // Export buttons
+            if ui.button("Export SVG").clicked() {
+                self.export_svg();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if ui.button("Export PNG").clicked() {
+                    self.export_png();
+                }
+            }
 
             // Show current file and unsaved changes indicator
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
