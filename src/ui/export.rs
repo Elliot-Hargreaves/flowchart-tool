@@ -2,12 +2,14 @@
 //!
 //! Notes:
 //! - SVG export is supported on all targets (native + wasm).
-//! - PNG export is supported on native targets only (wasm skipped).
+//! - PNG export is supported on all targets; on native it uses resvg/tiny-skia, on wasm it rasterizes via HTML Canvas.
 
 use crate::constants;
 use crate::types::*;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::JsCast;
 
 use super::state::{ConnectionStyle, ExportOptions, ExportScope, FlowchartApp, TextWrappingMode};
 
@@ -42,7 +44,7 @@ impl FlowchartApp {
         }
     }
 
-    /// Export with options to PNG (native builds only).
+    /// Export with options to PNG.
     pub fn export_png_with_options(&mut self, ctx: &eframe::egui::Context, options: &ExportOptions) {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -104,6 +106,128 @@ impl FlowchartApp {
                     }
                 }
             });
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (svg, width, height) = self.build_svg_with_options(ctx, options);
+
+            // Prepare DOM handles
+            let window = web_sys::window().expect("window");
+            let document = window.document().expect("document");
+
+            // Create a Blob for the SVG to avoid data-URL issues
+            let parts = js_sys::Array::new();
+            parts.push(&eframe::wasm_bindgen::JsValue::from_str(&svg));
+            let mut bag = web_sys::BlobPropertyBag::new();
+            bag.set_type("image/svg+xml");
+            let svg_blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &bag)
+                .expect("blob");
+            let svg_url = web_sys::Url::create_object_url_with_blob(&svg_blob).expect("url");
+
+            // Create <img> to decode the SVG
+            let img = document
+                .create_element("img")
+                .expect("img")
+                .dyn_into::<web_sys::HtmlImageElement>()
+                .expect("HtmlImageElement");
+
+            // Output size with scale
+            let scale = options.png_scale.clamp(0.25, 8.0);
+            let out_w = ((width as f32) * scale).round().max(1.0) as u32;
+            let out_h = ((height as f32) * scale).round().max(1.0) as u32;
+
+            // Create an offscreen canvas
+            let canvas = document
+                .create_element("canvas")
+                .expect("canvas")
+                .dyn_into::<web_sys::HtmlCanvasElement>()
+                .expect("HtmlCanvasElement");
+            canvas.set_width(out_w);
+            canvas.set_height(out_h);
+            let ctx2d = canvas
+                .get_context("2d")
+                .expect("2d ctx")
+                .expect("2d ctx opt")
+                .dyn_into::<web_sys::CanvasRenderingContext2d>()
+                .expect("CanvasRenderingContext2d");
+
+            // Optional background fill
+            if options.include_background {
+                let c = options.background_color;
+                let rgba = format!(
+                    "rgba({}, {}, {}, {})",
+                    c.r(),
+                    c.g(),
+                    c.b(),
+                    (c.a() as f32) / 255.0
+                );
+                ctx2d.set_fill_style(&eframe::wasm_bindgen::JsValue::from_str(&rgba));
+                ctx2d.fill_rect(0.0, 0.0, out_w as f64, out_h as f64);
+            }
+
+            // Set up onload to draw and download
+            let onload = {
+                let ctx2d = ctx2d.clone();
+                let canvas = canvas.clone();
+                let document = document.clone();
+                let svg_url_for_cleanup = svg_url.clone();
+                let img_for_draw = img.clone();
+                eframe::wasm_bindgen::closure::Closure::wrap(Box::new(move || {
+                    // Draw with scaling
+                    let _ = ctx2d.save();
+                    let _ = ctx2d.scale(scale as f64, scale as f64);
+                    let _ = ctx2d.draw_image_with_html_image_element(&img_for_draw, 0.0, 0.0);
+                    let _ = ctx2d.restore();
+
+                    // Convert to PNG blob and trigger a download
+                    // Clone handles so the outer onload closure doesn't move its captured vars,
+                    // allowing it to implement FnMut rather than FnOnce.
+                    let document_for_cb = document.clone();
+                    let svg_url_for_cb = svg_url_for_cleanup.clone();
+
+                    let callback = eframe::wasm_bindgen::closure::Closure::wrap(Box::new(
+                        move |blob_opt: Option<web_sys::Blob>| {
+                            if let Some(blob) = blob_opt {
+                                if let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) {
+                                    if let Ok(anchor_el) = document_for_cb.create_element("a") {
+                                        if let Ok(anchor) = anchor_el
+                                            .dyn_into::<web_sys::HtmlAnchorElement>()
+                                        {
+                                            anchor.set_href(&url);
+                                            anchor.set_download("flowchart.png");
+                                            // Append to body for broader browser compatibility
+                                            if let Some(body) = document_for_cb.body() {
+                                                let _ = body.append_child(&anchor);
+                                                anchor.click();
+                                                let _ = body.remove_child(&anchor);
+                                            } else {
+                                                anchor.click();
+                                            }
+                                        }
+                                    }
+                                    let _ = web_sys::Url::revoke_object_url(&url);
+                                }
+                            }
+                            // Clean up the SVG object URL
+                            let _ = web_sys::Url::revoke_object_url(&svg_url_for_cb);
+                        },
+                    ) as Box<dyn FnMut(Option<web_sys::Blob>)>);
+
+                    // Use the correct web-sys API: to_blob_with_type(callback, mime)
+                    let _ = canvas.to_blob_with_type(
+                        callback.as_ref().unchecked_ref(),
+                        "image/png",
+                    );
+                    // Keep the closure alive until JS calls back
+                    callback.forget();
+                }) as Box<dyn FnMut()>)
+            };
+
+            img.set_onload(Some(onload.as_ref().unchecked_ref()));
+            img.set_src(&svg_url);
+            // Prevent Rust from dropping the closure too early
+            onload.forget();
         }
     }
 

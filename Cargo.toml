@@ -30,7 +30,27 @@ fontdb = "0.22"
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Document", "HtmlHeadElement", "HtmlCanvasElement", "Window", "Element", "Request", "RequestInit", "RequestMode", "Response", "Headers", "FileReader", "ProgressEvent", "File"] }
+web-sys = { version = "0.3", features = [
+    "Document",
+    "HtmlHeadElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "HtmlImageElement",
+    "HtmlAnchorElement",
+    "Window",
+    "Element",
+    "Url",
+    "Blob",
+    "BlobPropertyBag",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    "FileReader",
+    "ProgressEvent",
+    "File"
+] }
 js-sys = "0.3"
 
 [lib]

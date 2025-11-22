@@ -208,21 +208,19 @@ impl eframe::App for FlowchartApp {
                             self.show_export_dialog = true;
                             ui.close();
                         }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        {
-                            if ui.button("PNG…").clicked() {
-                                self.pending_export_format = Some(crate::ui::state::ExportFormat::Png);
-                                self.export_options.include_grid = self.canvas.show_grid;
-                                self.export_options.background_color = if self.dark_mode {
-                                    egui::Color32::from_gray(20)
-                                } else {
-                                    egui::Color32::WHITE
-                                };
-                                self.export_options.scope = crate::ui::state::ExportScope::WholeGraph;
-                                self.export_options.stroke_color = egui::Color32::DARK_GRAY;
-                                self.show_export_dialog = true;
-                                ui.close();
-                            }
+                        // PNG export is available on all targets
+                        if ui.button("PNG…").clicked() {
+                            self.pending_export_format = Some(crate::ui::state::ExportFormat::Png);
+                            self.export_options.include_grid = self.canvas.show_grid;
+                            self.export_options.background_color = if self.dark_mode {
+                                egui::Color32::from_gray(20)
+                            } else {
+                                egui::Color32::WHITE
+                            };
+                            self.export_options.scope = crate::ui::state::ExportScope::WholeGraph;
+                            self.export_options.stroke_color = egui::Color32::DARK_GRAY;
+                            self.show_export_dialog = true;
+                            ui.close();
                         }
                     });
                 });
@@ -473,12 +471,9 @@ impl FlowchartApp {
                     );
                 });
 
-                // PNG-only option: scale factor (native only)
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    if self.pending_export_format == Some(crate::ui::state::ExportFormat::Png) {
-                        ui.add(egui::Slider::new(&mut self.export_options.png_scale, 0.25..=4.0).text("PNG scale"));
-                    }
+                // PNG-only option: scale factor (available on all targets)
+                if self.pending_export_format == Some(crate::ui::state::ExportFormat::Png) {
+                    ui.add(egui::Slider::new(&mut self.export_options.png_scale, 0.25..=4.0).text("PNG scale"));
                 }
 
                 ui.separator();
@@ -511,22 +506,13 @@ impl FlowchartApp {
                             });
                         }
                         Some(crate::ui::state::ExportFormat::Png) => {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                ui.add_enabled_ui(!selection_empty, |ui| {
-                                    if ui.button("Export PNG").clicked() {
-                                        self.export_png_with_options(ctx, &options_copy);
-                                        self.show_export_dialog = false;
-                                        self.pending_export_format = None;
-                                    }
-                                });
-                            }
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                ui.add_enabled_ui(false, |ui| {
-                                    ui.button("Export PNG");
-                                });
-                            }
+                            ui.add_enabled_ui(!selection_empty, |ui| {
+                                if ui.button("Export PNG").clicked() {
+                                    self.export_png_with_options(ctx, &options_copy);
+                                    self.show_export_dialog = false;
+                                    self.pending_export_format = None;
+                                }
+                            });
                         }
                         None => {
                             // shouldn't happen; just show a disabled button
